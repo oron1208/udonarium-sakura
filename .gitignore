@@ -1,0 +1,42 @@
+# Compiled output
+/dist
+/tmp
+/out-tsc
+/bazel-out
+
+# Node
+/node_modules
+npm-debug.log
+yarn-error.log
+
+# IDE
+.idea/
+.vscode/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# Angular
+.angular/cache/
+
+# Misc
+.Dots
+.sass-cache/
+/connect.lock
+/coverage
+/libpeerconnection.log
+testem.log
+/typings
+
+# System
+.DS_Store
+Thumbs.db
+
+# SkyWay credentials (never commit!)
+sakura/php/config.local.php
+
+# Cypress (removed but just in case)
+/cypress

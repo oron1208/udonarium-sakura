@@ -1,0 +1,362 @@
+/* You can add global styles to this file, and also import other style files */
+
+@import "~@ng-select/ng-select/themes/default.theme.css";
+
+.ng-select.ud-select {
+  display: inline-block;
+  vertical-align: baseline;
+  font-size: 80%;
+  min-height: 20px;
+}
+
+.ng-select.ud-select .ng-select-container{
+  min-height: 20px;
+  height: 20px;
+}
+
+.ng-select.ng-select-single .ng-select-container .ng-value-container .ng-input {
+  top: auto;
+}
+
+.ng-dropdown-panel.ud-select .ng-dropdown-panel-items .ng-option {
+  font-size: 80%;
+  padding: 4px 10px;
+}
+
+.ng-dropdown-panel.ud-select  {
+  width: auto !important;
+  max-width: 550px;
+  z-index: 2000000;
+}
+
+button {
+  background-color: #eee;
+  color: #444;
+  border: solid 1px #CCC;
+  padding: 0.35em 0.7em;
+  margin: 0 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  cursor: hand;
+}
+
+button:hover {
+  background-color: #cfd8dc;
+}
+
+button:disabled {
+  background-color: #eee;
+  color: #aaa;
+  cursor: auto;
+}
+
+button.danger {
+  background-color: rgb(207, 82, 82);
+  color: #eee;
+  border: solid 1px rgb(184, 59, 59);
+}
+
+button.danger:hover {
+  background-color: rgb(160, 32, 32);
+  color: #f5f5f5;
+}
+
+button.danger:disabled {
+  background-color: rgb(224, 131, 131);
+  border: solid 1px rgb(187, 55, 55);
+  color: #eee;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: hsl(0, 0%, 97%);
+  touch-action: manipulation;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Verdana,
+    Meiryo, "M+ 1p", sans-serif;
+  position: relative;
+}
+
+.sk-cube-grid {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  width: 100px;
+  height: 100px;
+  margin: auto;
+}
+
+.sk-cube-grid .sk-cube {
+  width: 33%;
+  height: 33%;
+  background-color: #666;
+  float: left;
+  -webkit-animation: sk-cubeGridScaleDelay 1.3s infinite ease-in-out;
+  animation: sk-cubeGridScaleDelay 1.3s infinite ease-in-out;
+}
+
+.sk-cube-grid .sk-title {
+  width: 100%;
+  text-align: center;
+  float: left;
+}
+
+.sk-cube-grid .sk-cube1 {
+  -webkit-animation-delay: 0.2s;
+  animation-delay: 0.2s;
+}
+
+.sk-cube-grid .sk-cube2 {
+  -webkit-animation-delay: 0.3s;
+  animation-delay: 0.3s;
+}
+
+.sk-cube-grid .sk-cube3 {
+  -webkit-animation-delay: 0.4s;
+  animation-delay: 0.4s;
+}
+
+.sk-cube-grid .sk-cube4 {
+  -webkit-animation-delay: 0.1s;
+  animation-delay: 0.1s;
+}
+
+.sk-cube-grid .sk-cube5 {
+  -webkit-animation-delay: 0.2s;
+  animation-delay: 0.2s;
+}
+
+.sk-cube-grid .sk-cube6 {
+  -webkit-animation-delay: 0.3s;
+  animation-delay: 0.3s;
+}
+
+.sk-cube-grid .sk-cube7 {
+  -webkit-animation-delay: 0s;
+  animation-delay: 0s;
+}
+
+.sk-cube-grid .sk-cube8 {
+  -webkit-animation-delay: 0.1s;
+  animation-delay: 0.1s;
+}
+
+.sk-cube-grid .sk-cube9 {
+  -webkit-animation-delay: 0.2s;
+  animation-delay: 0.2s;
+}
+
+@-webkit-keyframes sk-cubeGridScaleDelay {
+
+  0%,
+  70%,
+  100% {
+    -webkit-transform: scale(1, 1);
+    transform: scale(1, 1);
+  }
+
+  35% {
+    -webkit-transform: scale(0, 0);
+    transform: scale(0, 0);
+  }
+}
+
+@-webkit-keyframes anime1 {
+  0% {
+    -webkit-transform: rotateZ(0deg);
+    transform: rotateZ(0deg);
+  }
+
+  100% {
+    -webkit-transform: rotateZ(180deg);
+    transform: rotateZ(180deg);
+  }
+}
+
+@keyframes anime1 {
+  0% {
+    -webkit-transform: rotateZ(0deg);
+    transform: rotateZ(0deg);
+  }
+
+  100% {
+    -webkit-transform: rotateZ(180deg);
+    transform: rotateZ(180deg);
+  }
+}
+
+@keyframes sk-cubeGridScaleDelay {
+
+  0%,
+  70%,
+  100% {
+    -webkit-transform: scale(1, 1);
+    transform: scale(1, 1);
+  }
+
+  35% {
+    -webkit-transform: scale(0, 0);
+    transform: scale(0, 0);
+  }
+}
+
+/*
+ * デスクトップWindows版Chrome 102-103におけるレンダリング改善のための定義.
+ * 3D表示している画像にこのCSSクラスを付与すると至近距離で表示した時の解像度が鮮明になる.
+ * 将来的なChromeのアップデートでレンダリング速度が改善された場合は削除を検討.
+ */
+.chrome-smooth-image-trick {
+  transform-style: inherit;
+}
+
+/* ===== キャラクターグループ ホバー部位パネル (body直下) ===== */
+.cg-hover-portal {
+  position: fixed;
+  z-index: 99999;
+  min-width: 200px;
+  max-width: 260px;
+  background: rgba(30, 30, 35, 0.96);
+  border: 1px solid rgba(120, 120, 140, 0.5);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  padding: 0;
+  pointer-events: auto;
+  animation: cg-hover-appear 120ms ease-out;
+}
+
+@keyframes cg-hover-appear {
+  from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.cg-hover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(120, 120, 140, 0.3);
+  font-size: 12px;
+  color: #ccc;
+}
+
+.cg-hover-title {
+  font-weight: 600;
+  color: #e8e8e8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.cg-hover-count {
+  color: #888;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.cg-hover-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.cg-hover-list::-webkit-scrollbar { width: 4px; }
+.cg-hover-list::-webkit-scrollbar-thumb { background: rgba(120, 120, 140, 0.4); border-radius: 2px; }
+
+.cg-hover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.cg-hover-item:hover {
+  background: rgba(80, 80, 100, 0.4);
+}
+
+.cg-hover-item.is-targeted {
+  background: rgba(200, 60, 60, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 80, 80, 0.3);
+}
+
+.cg-hover-icon-wrap {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cg-hover-icon {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid rgba(120, 120, 140, 0.3);
+}
+
+.cg-hover-placeholder {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(60, 60, 70, 0.6);
+  border-radius: 4px;
+}
+
+.cg-hover-target {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  font-size: 12px;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+}
+
+.cg-hover-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cg-hover-name {
+  font-size: 12px;
+  color: #ddd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.cg-hover-resources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+}
+
+.cg-hover-resource {
+  font-size: 10px;
+  color: #aaa;
+  line-height: 1.2;
+}
+
+.cg-hover-resource .r-name { color: #888; }
+.cg-hover-resource .r-val  { color: #e0c060; font-weight: 600; }

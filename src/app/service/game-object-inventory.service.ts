@@ -1,0 +1,348 @@
+import { Injectable } from '@angular/core';
+import { ObjectStore } from '@udonarium/core/synchronize-object/object-store';
+import { EventSystem, Network } from '@udonarium/core/system';
+import { StringUtil } from '@udonarium/core/system/util/string-util';
+import { DataElement } from '@udonarium/data-element';
+import { CustomInventoryDefinition, DataSummarySetting, InventorySortSetting, SortKeyEntry, SortOrder } from '@udonarium/data-summary-setting';
+import { GameCharacter } from '@udonarium/game-character';
+import { TabletopObject } from '@udonarium/tabletop-object';
+
+type ObjectIdentifier = string;
+type LocationName = string;
+type ElementName = string;
+
+@Injectable({
+  providedIn: 'root'
+})
+export class GameObjectInventoryService {
+  private get summarySetting(): DataSummarySetting { return DataSummarySetting.instance; }
+
+  get sortTag(): string { return this.summarySetting.sortTag; }
+  set sortTag(sortTag: string) { this.summarySetting.sortTag = sortTag; this.syncSortKeysFromLegacy(); }
+  get sortOrder(): SortOrder { return this.summarySetting.sortOrder; }
+  set sortOrder(sortOrder: SortOrder) { this.summarySetting.sortOrder = sortOrder; this.syncSortKeysFromLegacy(); }
+
+  get sortTag2nd(): string { return this.summarySetting.sortTag2nd; }
+  set sortTag2nd(sortTag: string) { this.summarySetting.sortTag2nd = sortTag; this.syncSortKeysFromLegacy(); }
+  get sortOrder2nd(): SortOrder { return this.summarySetting.sortOrder2nd; }
+  set sortOrder2nd(sortOrder: SortOrder) { this.summarySetting.sortOrder2nd = sortOrder; this.syncSortKeysFromLegacy(); }
+
+  get sortKeys(): SortKeyEntry[] { return this.summarySetting.sortKeys; }
+  set sortKeys(keys: SortKeyEntry[]) { this.summarySetting.sortKeys = keys; }
+
+  get customInventories(): CustomInventoryDefinition[] { return this.summarySetting.customInventories; }
+  set customInventories(inventories: CustomInventoryDefinition[]) { this.summarySetting.customInventories = inventories; }
+
+  private syncSortKeysFromLegacy() {
+    this.summarySetting.sortKeys = [
+      { tag: this.summarySetting.sortTag, order: this.summarySetting.sortOrder },
+      { tag: this.summarySetting.sortTag2nd, order: this.summarySetting.sortOrder2nd }
+    ];
+  }
+
+  get dataTag(): string { return this.summarySetting.dataTag; }
+  set dataTag(dataTag: string) { this.summarySetting.dataTag = dataTag; }
+  get dataTags(): string[] { return this.summarySetting.dataTags; }
+
+  tableInventory: ObjectInventory = new ObjectInventory('table', object => { return object.location.name === 'table'; });
+  commonInventory: ObjectInventory = new ObjectInventory('common', object => { return object.location.name === 'common' || !this.isAnyLocation(object.location.name); });
+  privateInventory: ObjectInventory = new ObjectInventory('private', object => { return object.location.name === Network.peerId; });
+  graveyardInventory: ObjectInventory = new ObjectInventory('graveyard', object => { return object.location.name === 'graveyard'; });
+  customInventoryMap: Map<string, ObjectInventory> = new Map();
+
+  private locationMap: Map<ObjectIdentifier, LocationName> = new Map();
+  private tagNameMap: Map<ObjectIdentifier, ElementName> = new Map();
+
+  readonly newLineString: string = '/';
+  readonly newLineDataElement: DataElement = DataElement.create(this.newLineString);
+
+  constructor() {
+    this.initialize();
+  }
+
+  private initialize() {
+    EventSystem.register(this)
+      .on('OPEN_NETWORK', event => { this.refresh(); })
+      .on('CONNECT_PEER', event => { this.refresh(); })
+      .on('DISCONNECT_PEER', event => { this.refresh(); })
+      .on('UPDATE_GAME_OBJECT', event => {
+        let object = ObjectStore.instance.get(event.data.identifier);
+        if (!object) return;
+
+        if (object instanceof GameCharacter) {
+          let prevLocation = this.locationMap.get(object.identifier);
+          if (object.location.name !== prevLocation) {
+            this.locationMap.set(object.identifier, object.location.name);
+            this.refresh();
+          }
+        } else if (object instanceof DataElement) {
+          if (!this.containsInGameCharacter(object)) return;
+
+          let prevName = this.tagNameMap.get(object.identifier);
+          if ((this.dataTags.includes(prevName) || this.dataTags.includes(object.name)) && object.name !== prevName) {
+            this.tagNameMap.set(object.identifier, object.name);
+            this.refreshDataElements();
+          }
+          if (this.sortTag === object.name || this.sortTag2nd === object.name) {
+            this.refreshSort();
+          }
+          if (0 < object.children.length) {
+            this.refreshDataElements();
+            this.refreshSort();
+          }
+          this.callInventoryUpdate();
+        } else if (object instanceof DataSummarySetting) {
+          DataSummarySetting.instance['_sortKeys'] = null; // sortKeys cache clear
+          this.refreshDataElements();
+          this.refreshSort();
+          this.callInventoryUpdate();
+        }
+      })
+      .on('DELETE_GAME_OBJECT', event => {
+        this.locationMap.delete(event.data.identifier);
+        this.tagNameMap.delete(event.data.identifier);
+        this.refresh();
+      })
+      .on('SYNCHRONIZE_FILE_LIST', event => {
+        if (event.isSendFromSelf) this.callInventoryUpdate();
+      });
+  }
+
+  private containsInGameCharacter(element: DataElement): boolean {
+    let parent = element.parent;
+    let aliasName = GameCharacter.aliasName;
+    while (parent) {
+      if (parent.aliasName === aliasName) return true;
+      parent = parent.parent;
+    }
+    return false;
+  }
+
+  private refresh() {
+    this.refreshObjects();
+    this.refreshDataElements();
+    this.refreshSort();
+    this.callInventoryUpdate();
+  }
+
+  private refreshObjects() {
+    this.tableInventory.refreshObjects();
+    this.commonInventory.refreshObjects();
+    this.privateInventory.refreshObjects();
+    this.graveyardInventory.refreshObjects();
+    for (let inventory of this.customInventoryMap.values()) inventory.refreshObjects();
+  }
+
+  private refreshDataElements() {
+    this.tableInventory.refreshDataElements();
+    this.commonInventory.refreshDataElements();
+    this.privateInventory.refreshDataElements();
+    this.graveyardInventory.refreshDataElements();
+    for (let inventory of this.customInventoryMap.values()) inventory.refreshDataElements();
+  }
+
+  private refreshSort() {
+    this.tableInventory.refreshSort();
+    this.commonInventory.refreshSort();
+    this.privateInventory.refreshSort();
+    this.graveyardInventory.refreshSort();
+    for (let inventory of this.customInventoryMap.values()) inventory.refreshSort();
+  }
+
+  private callInventoryUpdate() {
+    EventSystem.trigger('UPDATE_INVENTORY', null);
+  }
+
+  private isAnyLocation(location: string): boolean {
+    if (location === 'table' || location === Network.peerId || location === 'graveyard') return true;
+    if (location === 'common') return true;
+    if (this.customInventories.some(inventory => inventory.id === location)) return true;
+    for (let conn of Network.peerContexts) {
+      if (conn.isOpen && location === conn.peerId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  getInventoryByLocation(location: string): ObjectInventory {
+    if (location === 'table') return this.tableInventory;
+    if (location === Network.peerId || location === 'private') return this.privateInventory;
+    if (location === 'graveyard') return this.graveyardInventory;
+    const custom = this.customInventories.find(inventory => inventory.id === location);
+    if (custom) return this.getCustomInventory(custom.id);
+    return this.commonInventory;
+  }
+
+  getCustomInventory(location: string): ObjectInventory {
+    if (!this.customInventoryMap.has(location)) {
+      this.customInventoryMap.set(location, new ObjectInventory(location, object => object.location.name === location));
+    }
+    return this.customInventoryMap.get(location);
+  }
+
+  addCustomInventory(name: string): CustomInventoryDefinition {
+    const displayName = (name || '').trim();
+    if (!displayName) return null;
+    const base = 'custom-' + Date.now().toString(36);
+    let id = base;
+    let count = 1;
+    const exists = () => this.customInventories.some(inventory => inventory.id === id);
+    while (exists()) id = `${base}-${count++}`;
+    const inventory = { id, name: displayName };
+    this.customInventories = [...this.customInventories, inventory];
+    this.getCustomInventory(id);
+    this.callInventoryUpdate();
+    return inventory;
+  }
+
+  removeCustomInventory(location: string, moveTo: string = 'common'): boolean {
+    const target = this.customInventories.find(inventory => inventory.id === location);
+    if (!target) return false;
+    for (let object of ObjectStore.instance.getObjects(GameCharacter)) {
+      if (object.location.name === location) object.setLocation(moveTo);
+    }
+    this.customInventories = this.customInventories.filter(inventory => inventory.id !== location);
+    this.customInventoryMap.delete(location);
+    const sortSettings = { ...this.summarySetting.inventorySortSettings };
+    delete sortSettings[location];
+    this.summarySetting.inventorySortSettings = sortSettings;
+    this.refresh();
+    return true;
+  }
+}
+
+export class ObjectInventory {
+  newLineString: string = '/';
+  private newLineDataElement: DataElement = DataElement.create(this.newLineString);
+
+  private get summarySetting(): DataSummarySetting { return DataSummarySetting.instance; }
+
+  get sortTag(): string { return this.summarySetting.sortTag; }
+  set sortTag(sortTag: string) { this.summarySetting.sortTag = sortTag; }
+
+  get sortOrder(): SortOrder { return this.summarySetting.sortOrder; }
+  set sortOrder(sortOrder: SortOrder) { this.summarySetting.sortOrder = sortOrder; }
+
+  get sortTag2nd(): string { return this.summarySetting.sortTag2nd; }
+  set sortTag2nd(sortTag: string) { this.summarySetting.sortTag2nd = sortTag; }
+
+  get sortOrder2nd(): SortOrder { return this.summarySetting.sortOrder2nd; }
+  set sortOrder2nd(sortOrder: SortOrder) { this.summarySetting.sortOrder2nd = sortOrder; }
+
+  get inventorySortSetting(): InventorySortSetting { return this.summarySetting.getInventorySortSetting(this.settingKey); }
+  set inventorySortSetting(setting: InventorySortSetting) { this.summarySetting.setInventorySortSetting(this.settingKey, setting); }
+
+  get sortEnabled(): boolean { return this.inventorySortSetting.enabled !== false; }
+  set sortEnabled(enabled: boolean) { this.inventorySortSetting = { ...this.inventorySortSetting, enabled }; }
+
+  get sortKeys(): SortKeyEntry[] { return this.inventorySortSetting.sortKeys || this.summarySetting.sortKeys; }
+  set sortKeys(keys: SortKeyEntry[]) { this.inventorySortSetting = { ...this.inventorySortSetting, sortKeys: keys }; }
+
+  get dataTag(): string { return this.summarySetting.dataTag; }
+  set dataTag(dataTag: string) { this.summarySetting.dataTag = dataTag; }
+
+  get dataTags(): string[] { return this.summarySetting.dataTags; }
+
+  private _tabletopObjects: TabletopObject[] = [];
+  get tabletopObjects(): TabletopObject[] {
+    if (this.needsRefreshObjects) {
+      this._tabletopObjects = this.searchTabletopObjects();
+      this.needsRefreshObjects = false;
+    }
+    if (this.needsSort) {
+      this._tabletopObjects = this.sortTabletopObjects(this._tabletopObjects);
+      this.needsSort = false;
+    }
+    return this._tabletopObjects;
+  }
+
+  get length(): number {
+    if (this.needsRefreshObjects) {
+      this._tabletopObjects = this.searchTabletopObjects();
+      this.needsRefreshObjects = false;
+    }
+    return this._tabletopObjects.length;
+  }
+
+  private _dataElementMap: Map<ObjectIdentifier, DataElement[]> = new Map();
+  get dataElementMap(): Map<ObjectIdentifier, DataElement[]> {
+    if (this.needsRefreshElements) {
+      this._dataElementMap.clear();
+      let caches = this.tabletopObjects;
+      for (let object of caches) {
+        if (!object.rootDataElement) continue;
+        let elements = this.dataTags.map(tag => tag === this.newLineString ? this.newLineDataElement : object.rootDataElement.getFirstElementByName(tag));
+        this._dataElementMap.set(object.identifier, elements);
+      }
+      this.needsRefreshElements = false;
+    }
+    return this._dataElementMap;
+  }
+
+  private needsRefreshObjects: boolean = true;
+  private needsRefreshElements: boolean = true;
+  private needsSort: boolean = true;
+
+  constructor(
+    readonly settingKey: string,
+    readonly classifier: (object: TabletopObject) => boolean
+  ) { }
+
+  refreshObjects() {
+    this.needsRefreshObjects = true;
+  }
+
+  refreshDataElements() {
+    this.needsRefreshElements = true;
+  }
+
+  refreshSort() {
+    this.needsSort = true;
+  }
+
+  private searchTabletopObjects(): TabletopObject[] {
+    let objects: TabletopObject[] = ObjectStore.instance.getObjects(GameCharacter);
+    let caches: TabletopObject[] = [];
+    for (let object of objects) {
+      if (this.classifier(object)) caches.push(object);
+    }
+    return caches;
+  }
+
+  private sortTabletopObjects(objects: TabletopObject[]): TabletopObject[] {
+    const sortKeys = this.sortKeys;
+    if (!this.sortEnabled) return objects;
+    if (!sortKeys || sortKeys.length < 1) return objects;
+    const firstTag = sortKeys[0].tag?.trim();
+    if (!firstTag || firstTag.length < 1) return objects;
+
+    objects.sort((a, b) => {
+      for (const key of sortKeys) {
+        const tag = key.tag?.trim();
+        if (!tag || tag.length < 1) continue;
+
+        const aElm = a.rootDataElement?.getFirstElementByName(tag);
+        const bElm = b.rootDataElement?.getFirstElementByName(tag);
+        if (!aElm && !bElm) continue;
+        if (!bElm) return -1;
+        if (!aElm) return 1;
+
+        const sortOrder = key.order === 'ASC' ? -1 : 1;
+        const aValue = this.convertToSortableValue(aElm);
+        const bValue = this.convertToSortableValue(bElm);
+        if (aValue < bValue) return sortOrder;
+        if (aValue > bValue) return sortOrder * -1;
+      }
+      return 0;
+    });
+    return objects;
+  }
+
+  private convertToSortableValue(dataElement: DataElement): number | string {
+    let value = dataElement.isNumberResource ? dataElement.currentValue : dataElement.value;
+    let resultStr = StringUtil.toHalfWidth((value + '').trim());
+    let resultNum = +resultStr;
+    return Number.isNaN(resultNum) ? resultStr : resultNum;
+  }
+}

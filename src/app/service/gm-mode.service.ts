@@ -1,0 +1,42 @@
+import { Injectable } from '@angular/core';
+import { BehaviorSubject } from 'rxjs';
+import { EventSystem } from '@udonarium/core/system';
+import { PeerCursor } from '@udonarium/peer-cursor';
+import { Logger } from '../class/core/system/util/logger';
+
+const STORAGE_KEY = 'udonarium-lycoris.gm-mode';
+
+@Injectable({ providedIn: 'root' })
+export class GmModeService {
+  private readonly gmModeSubject = new BehaviorSubject<boolean>(this.load());
+  readonly gmMode$ = this.gmModeSubject.asObservable();
+
+  get isGm(): boolean {
+    return PeerCursor.myCursor ? !!PeerCursor.myCursor.isGmMode : this.gmModeSubject.value;
+  }
+
+  toggle(): boolean {
+    return this.setGmMode(!this.isGm);
+  }
+
+  setGmMode(isGm: boolean): boolean {
+    this.gmModeSubject.next(isGm);
+    if (PeerCursor.myCursor) PeerCursor.myCursor.isGmMode = isGm;
+    try {
+      localStorage.setItem(STORAGE_KEY, isGm ? '1' : '0');
+    } catch (e) {
+      Logger.warn('GM mode localStorage save failed', e);
+    }
+    // Notify all components (including OnPush) that GM mode changed
+    EventSystem.trigger('GM_MODE_CHANGED', { isGm });
+    return isGm;
+  }
+
+  private load(): boolean {
+    try {
+      return localStorage.getItem(STORAGE_KEY) === '1';
+    } catch (e) {
+      return false;
+    }
+  }
+}

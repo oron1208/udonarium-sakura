@@ -1,0 +1,542 @@
+import { AfterViewInit, ChangeDetectionStrategy, ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
+import { Logger } from '../../class/core/system/util/logger';
+
+import { GameObject } from '@udonarium/core/synchronize-object/game-object';
+import { ObjectStore } from '@udonarium/core/synchronize-object/object-store';
+import { EventSystem, Network } from '@udonarium/core/system';
+import { DataElement } from '@udonarium/data-element';
+import { SortKeyEntry, SortOrder } from '@udonarium/data-summary-setting';
+import { GameCharacter } from '@udonarium/game-character';
+import { PresetSound, SoundEffect } from '@udonarium/sound-effect';
+import { TabletopObject } from '@udonarium/tabletop-object';
+
+import { ChatPaletteComponent } from 'component/chat-palette/chat-palette.component';
+import { GameCharacterSheetComponent } from 'component/game-character-sheet/game-character-sheet.component';
+import { ContextMenuAction, ContextMenuService, ContextMenuSeparator } from 'service/context-menu.service';
+import { GameObjectInventoryService, ObjectInventory } from 'service/game-object-inventory.service';
+import { PanelOption, PanelService } from 'service/panel.service';
+import { PointerDeviceService } from 'service/pointer-device.service';
+import { TabletopService } from 'service/tabletop.service';
+
+import { RemoteControllerComponent } from 'component/remote-controller/remote-controller.component';
+import { GmModeService } from 'service/gm-mode.service';
+
+@Component({
+  selector: 'game-object-inventory',
+  templateUrl: './game-object-inventory.component.html',
+  styleUrls: ['./game-object-inventory.component.css'],
+  changeDetection: ChangeDetectionStrategy.OnPush
+})
+export class GameObjectInventoryComponent implements OnInit, AfterViewInit, OnDestroy {
+  inventoryTypes: string[] = ['table', 'common', 'graveyard'];
+
+  selectTab: string = 'table';
+  selectedIdentifier: string = '';
+  multiMoveTargets: Set<string> = new Set();
+
+  isEdit: boolean = false;
+  isMultiMove: boolean = false;
+  newInventoryName: string = '';
+  disptimer = null;
+
+  get sortTag(): string { return this.inventoryService.sortTag; }
+  set sortTag(sortTag: string) { this.inventoryService.sortTag = sortTag; }
+  get sortOrder(): SortOrder { return this.inventoryService.sortOrder; }
+  set sortOrder(sortOrder: SortOrder) { this.inventoryService.sortOrder = sortOrder; }
+
+  get sortTag2nd(): string { return this.inventoryService.sortTag2nd; }
+  set sortTag2nd(sortTag: string) { this.inventoryService.sortTag2nd = sortTag; }
+  get sortOrder2nd(): SortOrder { return this.inventoryService.sortOrder2nd; }
+  set sortOrder2nd(sortOrder: SortOrder) { this.inventoryService.sortOrder2nd = sortOrder; }
+
+
+  get dataTag(): string { return this.inventoryService.dataTag; }
+  set dataTag(dataTag: string) { this.inventoryService.dataTag = dataTag; }
+  get dataTags(): string[] { return this.inventoryService.dataTags; }
+
+  get sortOrderName(): string { return this.sortOrder === SortOrder.ASC ? '昇順' : '降順'; }
+  get sortOrderName2nd(): string { return this.sortOrder2nd === SortOrder.ASC ? '昇順' : '降順'; }
+
+  get currentInventory(): ObjectInventory { return this.getInventory(this.selectTab); }
+  get sortEnabled(): boolean { return this.currentInventory.sortEnabled; }
+  set sortEnabled(enabled: boolean) { this.currentInventory.sortEnabled = enabled; this.currentInventory.refreshSort(); }
+  get sortKeys(): SortKeyEntry[] { return this.currentInventory.sortKeys; }
+  set sortKeys(keys: SortKeyEntry[]) { this.currentInventory.sortKeys = keys; this.currentInventory.refreshSort(); }
+
+  getSortKeyName(index: number): string { return `第${index + 1}`; }
+  getSortOrderName(order: SortOrder): string { return order === SortOrder.ASC ? '昇順' : '降順'; }
+
+  addSortKey() {
+    const keys = [...this.sortKeys];
+    keys.push({ tag: '', order: SortOrder.ASC });
+    this.sortKeys = keys;
+  }
+
+  removeSortKey(index: number) {
+    if (this.sortKeys.length <= 1) return;
+    const keys = [...this.sortKeys];
+    keys.splice(index, 1);
+    this.sortKeys = keys;
+  }
+
+  updateSortKeyTag(index: number, tag: string) {
+    const keys = [...this.sortKeys];
+    keys[index] = { ...keys[index], tag };
+    this.sortKeys = keys;
+    this.changeDetector.markForCheck();
+  }
+
+  updateSortKeyOrder(index: number, order: SortOrder) {
+    const keys = [...this.sortKeys];
+    keys[index] = { ...keys[index], order };
+    this.sortKeys = keys;
+    this.changeDetector.markForCheck();
+  }
+
+  // ドラッグ&ドロップでソートキーの順番入れ替え
+  dragSortKeyIndex: number = -1;
+  dragOverIndex: number = -1;
+
+  onSortKeyDragStart(index: number) {
+    this.dragSortKeyIndex = index;
+  }
+
+  onSortKeyDragOver(event: DragEvent, index: number) {
+    event.preventDefault();
+    this.dragOverIndex = index;
+  }
+
+  onSortKeyDragLeave(index: number) {
+    if (this.dragOverIndex === index) this.dragOverIndex = -1;
+  }
+
+  onSortKeyDrop(index: number) {
+    if (this.dragSortKeyIndex < 0 || this.dragSortKeyIndex === index) {
+      this.dragSortKeyIndex = -1;
+      this.dragOverIndex = -1;
+      return;
+    }
+    const keys = [...this.sortKeys];
+    const [moved] = keys.splice(this.dragSortKeyIndex, 1);
+    keys.splice(index, 0, moved);
+    this.sortKeys = keys;
+    this.dragSortKeyIndex = -1;
+    this.dragOverIndex = -1;
+  }
+
+  onSortKeyDragEnd() {
+    this.dragSortKeyIndex = -1;
+    this.dragOverIndex = -1;
+  }
+
+  // 表示項目のタグリスト（プルダウン用）
+  get availableTags(): string[] {
+    return this.dataTags.filter(t => t && t.length > 0);
+  }
+
+  get newLineString(): string { return this.inventoryService.newLineString; }
+
+  constructor(
+    private changeDetector: ChangeDetectorRef,
+    private panelService: PanelService,
+    private inventoryService: GameObjectInventoryService,
+    private contextMenuService: ContextMenuService,
+    private pointerDeviceService: PointerDeviceService,
+    public gmModeService: GmModeService,
+    private tabletopService: TabletopService
+  ) { }
+
+  get isAdvancedRoom(): boolean { return this.tabletopService.currentTable?.roomMode === 'advanced'; }
+
+  ngOnInit() {
+    Promise.resolve().then(() => this.panelService.title = 'インベントリ');
+    EventSystem.register(this)
+      .on('SELECT_TABLETOP_OBJECT', event => {
+        if (ObjectStore.instance.get(event.data.identifier) instanceof TabletopObject) {
+          this.selectedIdentifier = event.data.identifier;
+          this.changeDetector.markForCheck();
+        }
+      })
+      .on('SYNCHRONIZE_FILE_LIST', event => {
+        if (event.isSendFromSelf) this.changeDetector.markForCheck();
+      })
+      .on('UPDATE_INVENTORY', event => {
+        if (event.isSendFromSelf) {
+          this.updateInventoryTypes();
+          if (!this.inventoryTypes.includes(this.selectTab)) this.selectTab = 'common';
+          this.changeDetector.markForCheck();
+        }
+      })
+      .on('OPEN_NETWORK', event => {
+        this.updateInventoryTypes();
+        if (!this.inventoryTypes.includes(this.selectTab)) this.selectTab = Network.peerId;
+      });
+    this.updateInventoryTypes();
+
+  }
+
+  ngAfterViewInit() {
+    this.disptimer = setInterval(() => {
+      this.changeDetector.detectChanges();
+    }, 200 );
+    // インベントリ非表示機能のために追加、操作を検知して更新する方式に変えたい
+
+  }
+
+  ngOnDestroy() {
+    EventSystem.unregister(this);
+    this.disptimer = null;
+  }
+
+  getTabTitle(inventoryType: string) {
+    switch (inventoryType) {
+      case 'table':
+        return 'テーブル';
+      case Network.peerId:
+        return '個人';
+      case 'graveyard':
+        return '墓場';
+      default:
+        return this.inventoryService.customInventories.find(inventory => inventory.id === inventoryType)?.name || '共有';
+    }
+  }
+
+  isCustomInventory(inventoryType: string): boolean {
+    return this.inventoryService.customInventories.some(inventory => inventory.id === inventoryType);
+  }
+
+  addCustomInventory() {
+    if (!this.isAdvancedRoom) return;
+    const created = this.inventoryService.addCustomInventory(this.newInventoryName);
+    if (!created) return;
+    this.newInventoryName = '';
+    this.updateInventoryTypes();
+    this.selectTab = created.id;
+    this.changeDetector.markForCheck();
+  }
+
+  removeCurrentCustomInventory() {
+    if (!this.isAdvancedRoom || !this.isCustomInventory(this.selectTab)) return;
+    const title = this.getTabTitle(this.selectTab);
+    const count = this.getGameObjects(this.selectTab).length;
+    if (!confirm(`${title}インベントリを削除しますか？\n中の${count}個のコマは共有インベントリへ移動します。`)) return;
+    this.inventoryService.removeCustomInventory(this.selectTab, 'common');
+    this.updateInventoryTypes();
+    this.selectTab = 'common';
+    this.changeDetector.markForCheck();
+  }
+
+  private updateInventoryTypes() {
+    const base = ['table', 'common', Network.peerId, 'graveyard'];
+    const custom = this.isAdvancedRoom ? this.inventoryService.customInventories.map(inventory => inventory.id) : [];
+    this.inventoryTypes = [...base.slice(0, 3), ...custom, 'graveyard'];
+  }
+
+  isSecretDetailsHidden(gameObject: GameObject): boolean {
+    return gameObject instanceof GameCharacter && !!gameObject.secretDetails && !this.gmModeService.isGm;
+  }
+
+  isMyPiece(gameObject: GameObject): boolean {
+    return gameObject instanceof GameCharacter
+      && (this.includesJsonId(gameObject.ownerPeerIds, Network.peerId) || this.includesJsonId(gameObject.ownerUserIds, Network.peerContext?.userId));
+  }
+
+  toggleMyPiece(gameObject: GameObject, event?: Event) {
+    if (event) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
+    if (!(gameObject instanceof GameCharacter)) return;
+    const owned = !this.isMyPiece(gameObject);
+    gameObject.ownerPeerIds = this.setJsonId(gameObject.ownerPeerIds, Network.peerId, owned);
+    gameObject.ownerUserIds = this.setJsonId(gameObject.ownerUserIds, Network.peerContext?.userId, owned);
+    if (owned && !gameObject.sightEnabled) gameObject.sightEnabled = true;
+    gameObject.update();
+    SoundEffect.play(PresetSound.sweep);
+    this.changeDetector.markForCheck();
+  }
+
+  displayName(gameObject: GameObject): string {
+    return (gameObject as any).name || '';
+  }
+
+  displayValue(dataElm: DataElement): string {
+    return dataElm && dataElm.value != null ? dataElm.value + '' : '';
+  }
+
+  getInventory(inventoryType: string) {
+    return this.inventoryService.getInventoryByLocation(inventoryType);
+  }
+
+  getGameObjects(inventoryType: string): TabletopObject[] {
+    switch (inventoryType) {
+      case 'table':
+
+        let tableCharacterList_dest = [] ;
+        let tableCharacterList_scr = this.inventoryService.tableInventory.tabletopObjects;
+        for (let character of tableCharacterList_scr) {
+          let character_: GameCharacter = <GameCharacter> character;
+          if ( !character_.hideInventory ) tableCharacterList_dest.push( <TabletopObject> character );
+        }
+        return tableCharacterList_dest;
+
+      default:
+        return this.getInventory(inventoryType).tabletopObjects;
+    }
+  }
+
+  getInventoryTags(gameObject: GameCharacter): DataElement[] {
+    return this.getInventory(gameObject.location.name).dataElementMap.get(gameObject.identifier);
+  }
+
+  onContextMenu(e: Event, gameObject: GameCharacter) {
+    if (document.activeElement instanceof HTMLInputElement && document.activeElement.getAttribute('type') !== 'range') return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (!this.pointerDeviceService.isAllowedToOpenContextMenu) return;
+
+    this.selectGameObject(gameObject);
+
+    let position = this.pointerDeviceService.pointers[0];
+
+    let actions: ContextMenuAction[] = [];
+    const isHidden = this.isSecretDetailsHidden(gameObject);
+
+    if (this.isAdvancedRoom) {
+      actions.push({ name: this.isMyPiece(gameObject) ? '☑ 自分のコマ' : '☐ 自分のコマにする', action: () => this.toggleMyPiece(gameObject) });
+      actions.push(ContextMenuSeparator);
+    }
+
+    actions.push({ name: isHidden ? '詳細は秘匿中' : '詳細を表示', action: () => { if (!isHidden) this.showDetail(gameObject); } });
+    if (gameObject.location.name !== 'graveyard') {
+      actions.push({ name: isHidden ? 'チャットパレットは秘匿中' : 'チャットパレットを表示', action: () => { if (!isHidden) this.showChatPalette(gameObject) } });
+      actions.push({ name: isHidden ? 'リモコンは秘匿中' : 'リモコンを表示', action: () => { if (!isHidden) this.showRemoteController(gameObject) } });
+    }
+    actions.push(ContextMenuSeparator);
+    let locations = this.moveLocations();
+    for (let location of locations) {
+      if (gameObject.location.name === location.name) continue;
+      actions.push({
+        name: location.alias, action: () => {
+          gameObject.setLocation(location.name);
+          SoundEffect.play(PresetSound.piecePut);
+        }
+      });
+    }
+
+    if (gameObject.location.name === 'graveyard') {
+      actions.push({
+        name: '削除する', action: () => {
+          this.deleteGameObject(gameObject);
+          SoundEffect.play(PresetSound.sweep);
+        }
+      });
+    }
+    actions.push(ContextMenuSeparator);
+    actions.push({
+      name: 'コピーを作る', action: () => {
+        this.cloneGameObject(gameObject);
+        SoundEffect.play(PresetSound.piecePut);
+      }
+    });
+
+    this.contextMenuService.open(position, actions, gameObject.name);
+  }
+
+  toggleEdit() {
+    this.isEdit = !this.isEdit;
+  }
+
+  toggleMultiMove() {
+    if (this.isMultiMove) {
+      this.multiMoveTargets.clear();
+    }
+    this.isMultiMove = !this.isMultiMove;
+  }
+
+  cleanInventory() {
+    let tabTitle = this.getTabTitle(this.selectTab);
+    let gameObjects = this.getGameObjects(this.selectTab);
+    if (!confirm(`${tabTitle}に存在する${gameObjects.length}個の要素を完全に削除しますか？`)) return;
+    for (const gameObject of gameObjects) {
+      this.deleteGameObject(gameObject);
+    }
+    SoundEffect.play(PresetSound.sweep);
+  }
+
+  existsMultiMoveSelectedInTab(): boolean {
+    return this.getGameObjects(this.selectTab).some(x => this.multiMoveTargets.has(x.identifier))
+  }
+
+  toggleMultiMoveTarget(e: Event, gameObject: GameCharacter) {
+    if (!(e.target instanceof HTMLInputElement)) { return; }
+    if (e.target.checked) {
+      this.multiMoveTargets.add(gameObject.identifier);
+    } else {
+      this.multiMoveTargets.delete(gameObject.identifier);
+    }
+    Logger.debug(`multimove selected ${[...this.multiMoveTargets]}`);
+  }
+
+  allTabBoxCheck() {
+    if (this.existsMultiMoveSelectedInTab()) {
+      this.getGameObjects(this.selectTab).forEach(x => this.multiMoveTargets.delete(x.identifier));
+    } else {
+      this.getGameObjects(this.selectTab).forEach(x => this.multiMoveTargets.add(x.identifier));
+    }
+  }
+
+  onMultiMoveContextMenu() {
+    if (!this.pointerDeviceService.isAllowedToOpenContextMenu) return;
+
+    let position = this.pointerDeviceService.pointers[0];
+    let actions: ContextMenuAction[] = [];
+    let locations = this.moveLocations();
+    for (let location of locations) {
+      if (this.selectTab === location.name) continue;
+      actions.push({
+        name: location.alias, action: () => {
+          this.multiMove(location.name);
+          this.toggleMultiMove();
+          SoundEffect.play(PresetSound.piecePut);
+        }
+      });
+    }
+    if (this.selectTab == 'graveyard') {
+      actions.push({
+        name: '墓場から削除', action: () => {
+          this.multiDelete();
+          this.toggleMultiMove();
+          SoundEffect.play(PresetSound.sweep);
+        }
+      })
+    }
+
+    this.contextMenuService.open(position, actions, '一括移動');
+  }
+
+  multiMove(location: string) {
+    for (const gameObjectIdentifier of this.multiMoveTargets) {
+      let gameObject = ObjectStore.instance.get(gameObjectIdentifier);
+      if (gameObject instanceof GameCharacter) {
+        gameObject.setLocation(location);
+      }
+    }
+  }
+
+  multiDelete() {
+    let inGraveyard: Set<GameCharacter> = new Set();
+    for (const gameObjectIdentifier of this.multiMoveTargets) {
+      let gameObject: GameCharacter = ObjectStore.instance.get(gameObjectIdentifier);
+      if (gameObject instanceof GameCharacter && gameObject.location.name == 'graveyard') {
+        inGraveyard.add(gameObject);
+      }
+    }
+    if (inGraveyard.size < 1) return;
+
+    if (!confirm(`選択したもののうち墓場に存在する${inGraveyard.size}個の要素を完全に削除しますか？`)) return;
+    for (const gameObject of inGraveyard) {
+      this.deleteGameObject(gameObject);
+    }
+  }
+
+  private moveLocations(): { name: string, alias: string }[] {
+    const locations = [
+      { name: 'table', alias: 'テーブルに移動' },
+      { name: 'common', alias: '共有イベントリに移動' },
+      { name: Network.peerId, alias: '個人イベントリに移動' }
+    ];
+    if (this.isAdvancedRoom) {
+      for (const inventory of this.inventoryService.customInventories) {
+        locations.push({ name: inventory.id, alias: `${inventory.name}インベントリに移動` });
+      }
+    }
+    locations.push({ name: 'graveyard', alias: '墓場に移動' });
+    return locations;
+  }
+
+  private cloneGameObject(gameObject: TabletopObject) {
+    gameObject.clone();
+  }
+
+  private showDetail(gameObject: GameCharacter) {
+    EventSystem.trigger('SELECT_TABLETOP_OBJECT', { identifier: gameObject.identifier, className: gameObject.aliasName });
+    let coordinate = this.pointerDeviceService.pointers[0];
+    let title = 'キャラクターシート';
+    if (gameObject.name.length) title += ' - ' + gameObject.name;
+    let option: PanelOption = { title: title, left: coordinate.x - 800, top: coordinate.y - 300, width: 800, height: 600 };
+    let component = this.panelService.open<GameCharacterSheetComponent>(GameCharacterSheetComponent, option);
+    component.tabletopObject = gameObject;
+  }
+
+  private showChatPalette(gameObject: GameCharacter) {
+    let coordinate = this.pointerDeviceService.pointers[0];
+    let option: PanelOption = { left: coordinate.x - 250, top: coordinate.y - 175, width: 615, height: 350 };
+    let component = this.panelService.open<ChatPaletteComponent>(ChatPaletteComponent, option);
+    component.character = gameObject;
+  }
+
+  private showRemoteController(gameObject: GameCharacter) {
+    let coordinate = this.pointerDeviceService.pointers[0];
+    let option: PanelOption = { left: coordinate.x - 250, top: coordinate.y - 175, width: 700, height: 600 };
+    let component = this.panelService.open<RemoteControllerComponent>(RemoteControllerComponent, option);
+    component.character = gameObject;
+
+  }
+
+  private focusToObject(e: Event, gameObject: GameCharacter) {
+    if (!(e.target instanceof HTMLElement)) { return; }
+    if (new Set(["input", "button"]).has(e.target.tagName.toLowerCase())) { return; }
+    if (gameObject.location.name != "table") { return; }
+    if (gameObject.visibility === 'gmOnly' && !this.gmModeService.isGm) { return; }
+    EventSystem.trigger('FOCUS_TO_TABLETOP_COORDINATE', { x: gameObject.location.x, y: gameObject.location.y });
+  }
+
+  selectGameObject(gameObject: GameObject) {
+    if (this.isMultiMove) {
+      if (this.multiMoveTargets.has(gameObject.identifier)) {
+        this.multiMoveTargets.delete(gameObject.identifier);
+      } else {
+        this.multiMoveTargets.add(gameObject.identifier);
+      }
+      Logger.debug(`multimove selected ${[...this.multiMoveTargets]}`);
+    }
+    let aliasName: string = gameObject.aliasName;
+    EventSystem.trigger('SELECT_TABLETOP_OBJECT', { identifier: gameObject.identifier, className: gameObject.aliasName });
+    EventSystem.trigger('HIGHTLIGHT_TABLETOP_OBJECT', { identifier: gameObject.identifier });
+  }
+
+  private deleteGameObject(gameObject: GameObject) {
+    gameObject.destroy();
+    this.changeDetector.markForCheck();
+  }
+
+  trackByGameObject(index: number, gameObject: GameObject) {
+    return gameObject ? gameObject.identifier : index;
+  }
+
+  private includesJsonId(raw: string, id: string): boolean {
+    if (!id) return false;
+    try {
+      const ids = JSON.parse(raw || '[]');
+      return Array.isArray(ids) && ids.map(value => String(value)).includes(id);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  private setJsonId(raw: string, id: string, enabled: boolean): string {
+    let ids: string[] = [];
+    try {
+      const parsed = JSON.parse(raw || '[]');
+      if (Array.isArray(parsed)) ids = parsed.map(value => String(value)).filter(value => 0 < value.length);
+    } catch (e) { }
+    if (id) {
+      const index = ids.indexOf(id);
+      if (enabled && index < 0) ids.push(id);
+      if (!enabled && 0 <= index) ids.splice(index, 1);
+    }
+    return JSON.stringify(ids);
+  }
+}

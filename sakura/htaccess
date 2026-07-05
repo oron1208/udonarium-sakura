@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────
+# ユドナリウムSAKURA - .htaccess（さくらレンタルサーバー用）
+# ─────────────────────────────────────────────────────────────
+
+# ── 文字エンコーディング ──────────────────────────────────────
+AddDefaultCharset UTF-8
+
+# ── SkyWay トークン API を PHPにルーティング ─────────────────
+RewriteEngine On
+RewriteRule ^v1/skyway2023/token$ /v1/skyway2023/token.php [L]
+
+# ── ステータス確認エンドポイント ──────────────────────────────
+RewriteRule ^v1/status$ /v1/status.php [L]
+
+# ── 静的ファイル以外は index.html にフォールバック（SPA） ────
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ /index.html [L]
+
+# ── キャッシュ設定 ────────────────────────────────────────────
+# ハッシュ付きJS/CSSは長期キャッシュ
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType application/javascript "access plus 1 year"
+  ExpiresByType text/css "access plus 1 year"
+  ExpiresByType image/png "access plus 1 month"
+  ExpiresByType image/jpeg "access plus 1 month"
+  ExpiresByType image/svg+xml "access plus 1 month"
+  ExpiresByType font/woff2 "access plus 1 year"
+  # HTMLとYAMLはキャッシュしない
+  ExpiresByType text/html "access plus 0 seconds"
+  ExpiresByType text/yaml "access plus 0 seconds"
+</IfModule>
+
+# ── 圧縮転送 ──────────────────────────────────────────────────
+<IfModule mod_deflate.c>
+  SetOutputFilter DEFLATE
+  AddOutputFilterByType DEFLATE text/html text/css application/javascript application/json text/yaml
+</IfModule>
