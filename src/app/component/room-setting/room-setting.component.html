@@ -1,10 +1,4 @@
 <div *ngIf="!isConnected;else other_content">
-  <div class="rights-notice">
-    <div class="rights-notice-title">利用規約について</div>
-    <div>
-      法令または公序良俗に違反する行為を禁止しています。
-    </div>
-  </div>
   <div>ルーム名 : <input class="input" (input)="calcPeerId($event.target.value, password)" [(ngModel)]="roomName" required minlength="1" maxlength="128" #roomNameValidation="ngModel"
       placeholder="ルームの名前は必須" /></div>
   <div>パスワード: <input class="input" (input)="calcPeerId(roomName, $event.target.value)" [(ngModel)]="password" maxlength="12" #passwordValidation="ngModel" placeholder="空ならパスワードなし"

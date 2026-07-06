@@ -411,7 +411,6 @@ export class AppComponent implements AfterViewInit, OnDestroy {
     setTimeout(() => {
       this.panelService.open(PeerMenuComponent, { width: 500, height: 450, left: 100 });
       this.panelService.open(ChatWindowComponent, { width: 700, height: 400, left: 100, top: 450 });
-      this.showRightsNoticeOnStartup();
     }, 0);
     this.startDeveloperClientBridge();
     this.installMakoDebugDump();
@@ -528,10 +527,20 @@ export class AppComponent implements AfterViewInit, OnDestroy {
   }
 
   private startDeveloperClientBridge() {
-    this.pollDeveloperAnnouncements();
-    this.sendDeveloperHeartbeat();
-    this.developerPollTimer = setInterval(() => this.pollDeveloperAnnouncements(), 3000);
-    this.developerHeartbeatTimer = setInterval(() => this.sendDeveloperHeartbeat(), 10000);
+    // サーバーAPIが存在するか事前チェック（/api/dev/announcementsを1回試行）
+    // 404 = サーバーAPIなし（さくら等の静的ホスティング）→ ポーリングしない
+    fetch('/api/dev/announcements?since=0', { cache: 'no-cache' }).then(response => {
+      if (!response.ok) {
+        Logger.debug('Developer API not available, skipping dev client bridge');
+        return;
+      }
+      this.pollDeveloperAnnouncements();
+      this.sendDeveloperHeartbeat();
+      this.developerPollTimer = setInterval(() => this.pollDeveloperAnnouncements(), 3000);
+      this.developerHeartbeatTimer = setInterval(() => this.sendDeveloperHeartbeat(), 10000);
+    }).catch(() => {
+      Logger.debug('Developer API unreachable, skipping dev client bridge');
+    });
   }
 
   private async pollDeveloperAnnouncements() {
