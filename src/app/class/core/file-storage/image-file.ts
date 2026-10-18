@@ -1,5 +1,7 @@
 import { CanvasUtil } from './canvas-util';
 import { FileReaderUtil } from './file-reader-util';
+import { FileProcessingWorker } from './file-processing-worker';
+import { Logger } from '../system/util/logger';
 
 export enum ImageState {
   NULL = 0,
@@ -37,20 +39,29 @@ export class ImageFile {
     }
   };
 
+  /** サーバー404確定かつblob未所持のMISSING状態（プレースホルダー表示用。contextには保存されない） */
+  missing: boolean = false;
+  static readonly MISSING_PLACEHOLDER_URL = './assets/images/media-missing.svg';
+
   get identifier(): string { return this.context.identifier };
   get name(): string { return this.context.name };
   get blob(): Blob { return this.context.blob ? this.context.blob : this.context.thumbnail.blob; };
-  get url(): string { return this.context.url ? this.context.url : this.context.thumbnail.url; };
+  get url(): string {
+    if (this.missing) return ImageFile.MISSING_PLACEHOLDER_URL;
+    return this.context.url ? this.context.url : this.context.thumbnail.url;
+  };
   get thumbnail(): ThumbnailContext { return this.context.thumbnail };
 
   get state(): ImageState {
-    if (!this.url && !this.blob) return ImageState.NULL;
-    if (this.url && !this.blob) return ImageState.URL;
+    // A MISSING placeholder is presentation only, not a usable URL resource.
+    const url = this.context.url || this.context.thumbnail.url;
+    if (!url && !this.blob) return ImageState.NULL;
+    if (url && !this.blob) return ImageState.URL;
     if (this.blob === this.thumbnail.blob) return ImageState.THUMBNAIL;
     return ImageState.COMPLETE;
   }
 
-  get isEmpty(): boolean { return this.state <= ImageState.NULL; }
+  get isEmpty(): boolean { return !this.missing && this.state <= ImageState.NULL; }
 
   private constructor() { }
 
@@ -78,22 +89,20 @@ export class ImageFile {
   }
 
   static async createAsync(file: File): Promise<ImageFile>
-  static async createAsync(blob: Blob): Promise<ImageFile>
-  static async createAsync(arg: any): Promise<ImageFile> {
+  static async createAsync(blob: Blob, name?: string): Promise<ImageFile>
+  static async createAsync(arg: any, name?: string): Promise<ImageFile> {
     if (arg instanceof File) {
       return await ImageFile._createAsync(arg, arg.name);
     } else if (arg instanceof Blob) {
-      return await ImageFile._createAsync(arg);
+      return await ImageFile._createAsync(arg, name);
     }
   }
 
   private static async _createAsync(blob: Blob, name?: string): Promise<ImageFile> {
-    let arrayBuffer = await FileReaderUtil.readAsArrayBufferAsync(blob);
-
     let imageFile = new ImageFile();
-    imageFile.context.identifier = await FileReaderUtil.calcSHA256Async(arrayBuffer);
+    imageFile.context.identifier = await FileReaderUtil.calcSHA256Async(blob);
     imageFile.context.name = name;
-    imageFile.context.blob = new Blob([arrayBuffer], { type: blob.type });
+    imageFile.context.blob = new Blob([blob], { type: blob.type });
     imageFile.context.url = window.URL.createObjectURL(imageFile.context.blob);
 
     try {
@@ -129,6 +138,25 @@ export class ImageFile {
     this.createURLs();
   }
 
+  /** Replace image bytes while preserving this ImageFile's identifier. */
+  replace(context: ImageContext) {
+    const identifier = this.context.identifier || context.identifier;
+    this.revokeURLs();
+    this.context = {
+      identifier,
+      name: context.name || identifier,
+      blob: context.blob || null,
+      type: context.type || '',
+      url: context.url || '',
+      thumbnail: {
+        blob: context.thumbnail?.blob || null,
+        type: context.thumbnail?.type || '',
+        url: context.thumbnail?.url || '',
+      }
+    };
+    this.createURLs();
+  }
+
   toContext(): ImageContext {
     return {
       identifier: this.context.identifier,
@@ -156,21 +184,35 @@ export class ImageFile {
     window.URL.revokeObjectURL(this.context.thumbnail.url);
   }
 
-  private static createThumbnailAsync(context: ImageContext): Promise<ThumbnailContext> {
+  private static async createThumbnailAsync(context: ImageContext): Promise<ThumbnailContext> {
+    try {
+      const result = await FileProcessingWorker.createThumbnail(context.blob, 128);
+      return {
+        type: result.type || result.blob.type,
+        blob: result.blob,
+        url: window.URL.createObjectURL(result.blob),
+      };
+    } catch (e) {
+      if (!FileProcessingWorker.isAvailable()) {
+        // Worker非対応環境：フォールバックで処理（WARNは出さない）
+      } else {
+        Logger.warn('[ImageFile] thumbnail worker fallback', e);
+      }
+      return await ImageFile.createThumbnailOnMainThreadAsync(context);
+    }
+  }
+
+  private static createThumbnailOnMainThreadAsync(context: ImageContext): Promise<ThumbnailContext> {
     return new Promise((resolve, reject) => {
       let image: HTMLImageElement = new Image();
       image.onload = (event) => {
-        let scale: number = Math.min(128 / Math.max(image.width, image.height), 1.0);
-        let dstWidth = image.width * scale;
-        let dstHeight = image.height * scale;
+        const maxDim = 128;
+        const scale: number = Math.min(maxDim / Math.max(image.naturalWidth, image.naturalHeight), 1.0);
+        const dstWidth = Math.max(1, Math.round(image.naturalWidth * scale));
+        const dstHeight = Math.max(1, Math.round(image.naturalHeight * scale));
 
-        let canvas: HTMLCanvasElement = document.createElement('canvas');
-        let render: CanvasRenderingContext2D = canvas.getContext('2d');
-        canvas.width = image.width;
-        canvas.height = image.height;
-
-        render.drawImage(image, 0, 0);
-        CanvasUtil.resize(canvas, dstWidth, dstHeight, true);
+        // 多段階縮小で高品質なサムネイルを生成
+        const canvas = CanvasUtil.resizeCanvas(image, dstWidth, dstHeight);
 
         canvas.toBlob(blob => {
           let thumbnail: ThumbnailContext = {

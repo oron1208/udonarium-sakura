@@ -77,8 +77,9 @@
 .vn-portrait-stack {
   position: relative;
   z-index: 1;
+  flex-shrink: 0;
   max-width: 100%;
-  max-height: 100%;
+  max-height: calc(100% * var(--vn-scale, 1));
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -116,8 +117,8 @@
 }
 
 .vn-actor.autofit .vn-portrait-stack {
-  height: 100%;
-  max-height: 100%;
+  height: calc(100% * var(--vn-scale, 1));
+  max-height: calc(100% * var(--vn-scale, 1));
 }
 
 .vn-actor.autofit .vn-portrait {
@@ -145,12 +146,11 @@
   border: 1px solid rgba(255, 255, 255, 0.25);
 }
 
-/* ═══════ bubble — side-aware ═══════ */
+/* ═══════ bubble — side-aware（立ち絵の上端に少し被せて追従） ═══════ */
 .vn-bubble {
-  position: absolute;
+  position: relative;
   z-index: 50;
-  top: 0;
-  left: 50%;
+  flex: 0 0 auto;
   width: min(380px, 32vw);
   min-height: 72px;
   box-sizing: border-box;
@@ -161,17 +161,15 @@
   border: 1px solid rgba(255, 255, 255, 0.32);
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.48), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   pointer-events: auto;
-  transform: translateX(-50%);
+  margin-bottom: -14px;
   animation: vn-bubble-life 280ms ease-out both, vn-bubble-float 1.2s ease-in-out infinite;
 }
 
 .vn-bubble.bubble-right {
-  left: 50%;
-  transform: translateX(10%);
+  align-self: flex-end;
 }
 .vn-bubble.bubble-left {
-  left: 50%;
-  transform: translateX(-110%);
+  align-self: flex-start;
 }
 
 .vn-bubble::after {
@@ -315,13 +313,34 @@
 
 .vn-log-tabs {
   display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   align-items: center;
   gap: 2px;
   padding: 4px 6px;
   border-bottom: 1px solid rgba(255,255,255,0.1);
   flex-shrink: 0;
 }
+.vn-log-tabs::-webkit-scrollbar { display: none; }
+.vn-log-messages, .vn-log-search-results {
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.22) transparent;
+}
+.vn-log-messages::-webkit-scrollbar, .vn-log-search-results::-webkit-scrollbar { width: 5px; }
+.vn-log-messages::-webkit-scrollbar-track, .vn-log-search-results::-webkit-scrollbar-track { background: transparent; }
+.vn-log-messages::-webkit-scrollbar-thumb, .vn-log-search-results::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.22);
+  border-radius: 8px;
+}
+.vn-log-messages::-webkit-scrollbar-button, .vn-log-search-results::-webkit-scrollbar-button { display: none; }
 .vn-log-tab {
+  flex-shrink: 0;
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 3px 8px;
   font-size: 11px;
   border: none;
@@ -337,6 +356,7 @@
 .vn-log-tab:hover { background: rgba(255,255,255,0.08); }
 .vn-log-spacer { flex: 1; }
 .vn-log-pin, .vn-log-collapse {
+  flex-shrink: 0;
   background: none;
   border: none;
   font-size: 12px;
@@ -1037,8 +1057,8 @@
 }
 
 @keyframes vn-bubble-float {
-  0%, 100% { margin-bottom: 0; }
-  50%      { margin-bottom: 5px; }
+  0%, 100% { margin-top: 0; }
+  50%      { margin-top: -5px; }
 }
 
 /* ═══════════ sub-panel floating ═══════════ */
@@ -1136,6 +1156,9 @@
   max-height: none;
   min-height: 150px;
 }
+.vn-float-panel.vn-chat-log.vn-float-minimized {
+  min-height: 36px;
+}
 .vn-float-panel.vn-chat-log .vn-log-tabs {
   flex-shrink: 0;
 }
@@ -1145,6 +1168,147 @@
   min-height: 0;
   max-height: none;
   overflow-y: auto;
+}
+
+/* ===== VNログ検索 ===== */
+.vn-log-search {
+  flex-shrink: 0;
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.15);
+  background: rgba(0,0,0,0.25);
+}
+.vn-log-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  color: #eee;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.vn-log-search-close {
+  position: absolute;
+  right: 10px;
+  margin-top: -24px;
+  background: none; border: none; color: #aaa; cursor: pointer; font-size: 12px;
+}
+.vn-log-search-results {
+  max-height: 140px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+.vn-log-search-item {
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #ddd;
+  word-break: break-all;
+}
+.vn-log-search-item:hover { background: rgba(255,255,255,0.12); }
+.vn-log-search-item .vls-name { font-weight: bold; }
+.vn-log-search-empty { color: #888; text-align: center; padding: 6px; font-size: 12px; }
+
+/* ===== VNログ画像サムネ＋拡大 ===== */
+.vn-log-thumb {
+  max-width: 72px;
+  max-height: 72px;
+  border-radius: 4px;
+  cursor: zoom-in;
+  vertical-align: middle;
+  margin-right: 4px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+.vn-image-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10500;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+.vn-image-zoom-overlay img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+}
+
+/* VNチャット入力欄へのドラッグ＆ドロップ */
+.vn-input.vn-image-drag-over {
+  outline: 2px dashed #4a67d6;
+  outline-offset: -2px;
+  background-color: rgba(74, 103, 214, 0.12);
+}
+
+/* ===== LINE/iMessage風 吹き出し表示 ===== */
+.vn-log-msg { display: flex; gap: 8px; margin: 6px 0; align-items: flex-start; flex-shrink: 0; }
+.vn-log-msg.mine { flex-direction: row-reverse; }
+.vn-log-avatar-slot { flex: 0 0 32px; width: 32px; }
+.vn-log-avatar {
+  display: block;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center 20%;
+  background: rgba(255,255,255,0.12);
+  cursor: zoom-in;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.vn-log-avatar-placeholder { display: grid; place-items: center; font-size: 18px; cursor: default; }
+.vn-log-content { min-width: 0; max-width: calc(100% - 40px); }
+.vn-log-msg.mine .vn-log-content { display: flex; flex-direction: column; align-items: flex-end; }
+.vn-log-bubble {
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  padding: 7px 11px;
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+}
+.vn-log-msg.other .vn-log-bubble {
+  background: rgba(255,255,255,0.13);
+  border-top-left-radius: 4px;
+}
+.vn-log-msg.mine .vn-log-bubble {
+  background: rgba(74,103,214,0.38);
+  border-top-right-radius: 4px;
+}
+.vn-log-msg.system { justify-content: center; }
+.vn-log-msg.system .vn-log-content { max-width: 95%; }
+.vn-log-msg.system .vn-log-bubble {
+  background: rgba(0,0,0,0.4);
+  color: rgba(255,255,255,0.55);
+  font-size: 11px;
+  font-style: normal;
+  border-radius: 10px;
+  text-align: center;
+  max-width: 100%;
+  padding: 3px 10px;
+}
+.vn-log-msg .vn-log-name {
+  display: block;
+  margin-right: 0;
+  font-size: 11px;
+  color: rgba(255,255,255,0.7);
+  font-weight: 600;
+  margin: 0 0 3px 2px;
+}
+.vn-log-text { white-space: pre-wrap; }
+.vn-log-msg.is-secret .vn-log-bubble { border: 1px dashed rgba(255,255,255,0.25); }
+.vn-log-image {
+  display: block;
+  max-width: min(150px, 100%);
+  max-height: 110px;
+  object-fit: contain;
+  border-radius: 8px;
+  margin-top: 3px;
+  cursor: zoom-in;
 }
 
 @keyframes vn-index-slide-out {
@@ -1208,6 +1372,13 @@
 }
 
 .vn-control-minimized {
-  max-height: 40px;
+  height: 44px;
+  max-height: none;
   overflow: hidden;
 }
+
+.vn-float-minimized {
+  height: auto;
+}
+
+.vn-palette-body-inner palette-browser { flex: 1; min-height: 0; min-width: 0; }

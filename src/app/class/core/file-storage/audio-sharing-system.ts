@@ -4,6 +4,8 @@ import { AudioStorage, CatalogItem } from './audio-storage';
 import { BufferSharingTask } from './buffer-sharing-task';
 import { FileReaderUtil } from './file-reader-util';
 import { ServerMediaStorage } from './server-media-storage';
+import { MediaLoadPriority } from './media-load-priority';
+import { MediaCache } from './media-cache';
 import { Logger } from '../system/util/logger';
 
 export class AudioSharingSystem {
@@ -15,8 +17,12 @@ export class AudioSharingSystem {
 
   private sendTaskMap: Map<string, BufferSharingTask<AudioFileContext>> = new Map();
   private receiveTaskMap: Map<string, BufferSharingTask<AudioFileContext>> = new Map();
-  private maxSendTask: number = 2;
-  private maxReceiveTask: number = 4;
+  private maxSendTask: number = 6;
+  private maxReceiveTask: number = 12;
+  /** 直近に補充announceを出したidentifier（スパム防止） */
+  private replenishAnnouncedAt: Map<string, number> = new Map();
+  /** 補充待ち再取得の重複実行防止 */
+  private replenishRetrying: Set<string> = new Set();
 
 
   private constructor() { }
@@ -28,7 +34,16 @@ export class AudioSharingSystem {
       .on('CONNECT_PEER', -1, event => {
         if (!event.isSendFromSelf) return;
         Logger.debug('CONNECT_PEER AudioStorageService !!!', event.data.peerId);
-        AudioStorage.instance.synchronize();
+        // InitialRoomSync sends one room ZIP first.  Older peers are handled by
+        // the explicit INITIAL_ROOM_SYNC_FALLBACK path below.
+      })
+      .on('INITIAL_ROOM_SYNC_FALLBACK', event => {
+        if (!event.isSendFromSelf || !event.data?.peerId) return;
+        AudioStorage.instance.synchronize(event.data.peerId);
+      })
+      .on('INITIAL_ROOM_MEDIA_CATALOG_FALLBACK', event => {
+        if (!event.isSendFromSelf || !Array.isArray(event.data?.audios)) return;
+        this.applyInitialCatalog(event.data.audios, event.data.sourcePeerId);
       })
       .on('SYNCHRONIZE_AUDIO_LIST', async event => {
         if (event.isSendFromSelf) return;
@@ -38,25 +53,57 @@ export class AudioSharingSystem {
         let request: CatalogItem[] = [];
 
         Logger.debug('SYNCHRONIZE_AUDIO_LIST active tasks ', this.sendTaskMap.size + this.receiveTaskMap.size);
+
+        // name復元＋フィルタを先に処理
+        const needFetch: CatalogItem[] = [];
         for (let item of otherCatalog) {
-          let audio: AudioFile = AudioStorage.instance.get(item.identifier);
+          let audio: AudioFile = AudioStorage.instance.get(item.identifier, false);
           if (audio === null) {
             audio = AudioFile.createEmpty(item.identifier);
             AudioStorage.instance.add(audio);
           }
-          // カタログにnameが含まれていれば事前設定（ハッシュ値表示を防ぐ）
-          if (item.name && audio.name === audio.identifier) {
+          // カタログにnameが含まれていれば事前設定（ハッシュ値・空文字表示を防ぐ）
+          if (item.name && (!audio.name || audio.name === audio.identifier)) {
             let ctx = audio.toContext();
             ctx.name = item.name;
             audio.apply(ctx);
           }
           if (audio.state < AudioState.COMPLETE && !this.receiveTaskMap.has(item.identifier)) {
-            let result = await ServerMediaStorage.fetchAudio(item.identifier);
+            needFetch.push(item);
+          }
+        }
+
+        // 再生中/参照中の音声を先に、未使用BGM素材は低優先度・少数並列で後回しにする
+        const priorityScores = MediaLoadPriority.getAudioScoreMap();
+        const prioritizedFetch = MediaLoadPriority.sortByScore(needFetch, priorityScores);
+        const hasActiveAudio = prioritizedFetch.some(item => MediaLoadPriority.scoreOf(priorityScores, item.identifier) >= MediaLoadPriority.ACTIVE_AUDIO_SCORE);
+        if (!hasActiveAudio && prioritizedFetch.length > 0) await this.sleep(750);
+        for (let i = 0; i < prioritizedFetch.length;) {
+          const score = MediaLoadPriority.scoreOf(priorityScores, prioritizedFetch[i].identifier);
+          const batchSize = score >= MediaLoadPriority.ACTIVE_AUDIO_SCORE ? 8 : 3;
+          const priority = MediaLoadPriority.fetchPriority(score, MediaLoadPriority.ACTIVE_AUDIO_SCORE);
+          const batch = prioritizedFetch.slice(i, i + batchSize);
+          i += batch.length;
+          const results = await Promise.all(
+            batch.map(async item => {
+              try {
+                const result = await MediaCache.fetchAudioWithCache(item.identifier, priority);
+                return { item, result };
+              } catch (e) {
+                return { item, result: { status: 'unreachable' as const } };
+              }
+            })
+          );
+          for (const { item, result } of results) {
             if (result.status === 'ok') {
               AudioStorage.instance.add(result.file);
+            } else if (result.status === 'missing') {
+              // サーバーに存在しない音声はplaceholderを削除し、所持者が再アップロードして自己修復する
+              AudioStorage.instance.delete(item.identifier);
+              this.requestReplenish(item.identifier);
+              Logger.debug(`[AudioSharingSystem] removed missing placeholder: ${item.identifier}`);
             } else {
-              // missing(本当に無い) / unreachable(サーバー障害) のどちらも P2P フォールバックで救済する。
-              request.push({ identifier: item.identifier, state: audio.state });
+              request.push(item);
             }
           }
         }
@@ -79,7 +126,7 @@ export class AudioSharingSystem {
         let randomRequest: CatalogItem[] = [];
 
         for (let item of request) {
-          let audio: AudioFile = AudioStorage.instance.get(item.identifier);
+          let audio: AudioFile = AudioStorage.instance.get(item.identifier, false);
           if (audio && item.state < audio.state) randomRequest.push({ identifier: item.identifier, state: item.state });
         }
 
@@ -88,7 +135,7 @@ export class AudioSharingSystem {
           Logger.debug('REQUEST_AUDIO_RESOURE Send!!! ' + event.data.receiver + ' -> ' + randomRequest);
           let index = Math.floor(Math.random() * randomRequest.length);
           let item: { identifier: string, state: number } = randomRequest[index];
-          let audio: AudioFile = AudioStorage.instance.get(item.identifier);
+          let audio: AudioFile = AudioStorage.instance.get(item.identifier, false);
           this.startSendTask(audio, event.data.receiver);
         } else {
           // 中継
@@ -115,14 +162,39 @@ export class AudioSharingSystem {
       .on('START_AUDIO_TRANSMISSION', event => {
         Logger.debug('START_AUDIO_TRANSMISSION ' + event.data.fileIdentifier);
         let identifier: string = event.data.fileIdentifier;
-        let audio: AudioFile = AudioStorage.instance.get(identifier);
+        let audio: AudioFile = AudioStorage.instance.get(identifier, false);
         if (this.receiveTaskMap.has(identifier) || (audio && AudioState.COMPLETE <= audio.state)) {
           Logger.warn('CANCEL_TASK_ ' + identifier);
           EventSystem.call('CANCEL_TASK_' + identifier, null, event.sendFrom);
         } else {
           this.startReceiveTask(identifier);
         }
+      })
+      .on('REQUEST_MEDIA_REPLENISH', event => {
+        if (event.isSendFromSelf) return;
+        const identifier: string = event.data?.identifier;
+        if (!identifier || event.data?.kind !== 'audio' || !/^[a-f0-9]{64}$/i.test(identifier)) return;
+        const audio: AudioFile = AudioStorage.instance.get(identifier, false);
+        // blob を完全所持しているピアだけが補充候補になる
+        if (!audio || audio.state < AudioState.COMPLETE || audio.state >= AudioState.URL || !audio.blob) return;
+        const blob: Blob = audio.blob;
+        const name: string = audio.name;
+        const waitMs = Math.floor(Math.random() * 1500);
+        Logger.debug(`[AudioSharingSystem] replenish candidate ${identifier.slice(0, 12)} in ${waitMs}ms`);
+        setTimeout(() => {
+          void ServerMediaStorage.replenishUploadAudio(identifier, blob, name);
+        }, waitMs);
       });
+  }
+
+  /** Re-enters the existing individual media synchronization path. */
+  applyInitialCatalog(catalog: CatalogItem[], sourcePeerId: string) {
+    if (!Array.isArray(catalog) || !sourcePeerId) return;
+    EventSystem.trigger({
+      eventName: 'SYNCHRONIZE_AUDIO_LIST',
+      data: catalog,
+      sendFrom: sourcePeerId
+    });
   }
 
   private destroy() {
@@ -159,7 +231,7 @@ export class AudioSharingSystem {
   }
 
   private startReceiveTask(identifier: string) {
-    let audio: AudioFile = AudioStorage.instance.get(identifier);
+    let audio: AudioFile = AudioStorage.instance.get(identifier, false);
     let task = BufferSharingTask.createReceiveTask<AudioFileContext>(identifier);
     this.receiveTaskMap.set(identifier, task);
 
@@ -207,6 +279,57 @@ export class AudioSharingSystem {
     let peerIds = Network.peerIds;
     peerIds.splice(peerIds.indexOf(Network.peerId), 1);
     EventSystem.call('REQUEST_AUDIO_RESOURE', { identifiers: request, receiver: Network.peerId, candidatePeers: peerIds }, peerId);
+  }
+
+  /** サーバー404を観測した音声の補充を部屋に依頼し、自分も後刻再取得を試みる */
+  private requestReplenish(identifier: string) {
+    if (!/^[a-f0-9]{64}$/i.test(identifier)) return;
+    const now = Date.now();
+    const last = this.replenishAnnouncedAt.get(identifier) ?? 0;
+    if (now - last < 30000) return;
+    this.replenishAnnouncedAt.set(identifier, now);
+    Logger.debug(`[AudioSharingSystem] replenish announce: ${identifier.slice(0, 12)}`);
+    // 自分がblob完全所持なら自分で再PUTする（1人部屋では他ピアに依頼できないため自己修復）
+    const self = AudioStorage.instance.get(identifier, false);
+    if (self && AudioState.COMPLETE <= self.state && self.state < AudioState.URL && self.blob) {
+      const blob = self.blob;
+      const name = self.name;
+      const waitMs = Math.floor(Math.random() * 1500);
+      setTimeout(() => { void ServerMediaStorage.replenishUploadAudio(identifier, blob, name); }, waitMs);
+    }
+    EventSystem.call('REQUEST_MEDIA_REPLENISH', { identifier, requester: Network.peerId, kind: 'audio' });
+    this.scheduleReplenishRetry(identifier);
+  }
+
+  /** 補充を待って再取得（2.5/5/8秒後の最大3回）。取得できたらAudioStorageへ戻す */
+  private scheduleReplenishRetry(identifier: string) {
+    if (this.replenishRetrying.has(identifier)) return;
+    this.replenishRetrying.add(identifier);
+    void (async () => {
+      try {
+        const attempts = [2500, 5000, 8000];
+        for (const delayMs of attempts) {
+          await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+          const local: AudioFile = AudioStorage.instance.get(identifier, false);
+          if (local && AudioState.COMPLETE <= local.state && local.state < AudioState.URL) return;
+          try {
+            const result = await MediaCache.fetchAudioWithCache(identifier);
+            if (result.status === 'ok') {
+              AudioStorage.instance.add(result.file);
+              Logger.debug(`[AudioSharingSystem] replenished: ${identifier.slice(0, 12)}`);
+              return;
+            }
+            if (result.status === 'unreachable') return;
+          } catch { return; }
+        }
+      } finally {
+        this.replenishRetrying.delete(identifier);
+      }
+    })();
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private hasActiveTask(): boolean {

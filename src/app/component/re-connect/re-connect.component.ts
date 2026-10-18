@@ -1,4 +1,4 @@
-import { Component, ChangeDetectorRef, OnDestroy, OnInit } from '@angular/core';
+import { Component, ChangeDetectorRef, OnDestroy, OnInit, ChangeDetectionStrategy } from '@angular/core';
 import { Logger } from '../../class/core/system/util/logger';
 
 import { ObjectStore } from '@udonarium/core/synchronize-object/object-store';
@@ -16,6 +16,7 @@ import { GameTableMask } from '@udonarium/game-table-mask';
 import { RangeArea } from '@udonarium/range';
 import { Terrain } from '@udonarium/terrain';
 import { TextNote } from '@udonarium/text-note';
+import { TableSelecter } from '@udonarium/table-selecter';
 
 import { PasswordCheckComponent } from 'component/password-check/password-check.component';
 import { RoomSettingComponent } from 'component/room-setting/room-setting.component';
@@ -23,9 +24,11 @@ import { ModalService } from 'service/modal.service';
 import { PanelService } from 'service/panel.service';
 
 @Component({
-  selector: 're-connect',
-  templateUrl: './re-connect.component.html',
-  styleUrls: ['./re-connect.component.css'],
+    selector: 're-connect',
+    templateUrl: './re-connect.component.html',
+    styleUrls: ['./re-connect.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class ReConnectComponent implements OnInit, OnDestroy {
   rooms: { alias: string, roomName: string, peerContexts: PeerContext[] }[] = [];
@@ -252,6 +255,7 @@ export class ReConnectComponent implements OnInit, OnDestroy {
       this.deleteGameObject(obj);
     }
 
+    TableSelecter.instance.resetForRoomJoin();
     ObjectStore.instance.clearDeleteHistory();
   }
 

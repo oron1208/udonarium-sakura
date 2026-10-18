@@ -35,10 +35,11 @@ class RemoteControllerSelect {
 }
 
 @Component({
-  selector: 'remote-controller',
-  templateUrl: './remote-controller.component.html',
-  styleUrls: ['./remote-controller.component.css']
-
+    selector: 'remote-controller',
+    templateUrl: './remote-controller.component.html',
+    styleUrls: ['./remote-controller.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class RemoteControllerComponent implements OnInit, OnDestroy, AfterViewInit {
 
@@ -193,6 +194,7 @@ export class RemoteControllerComponent implements OnInit, OnDestroy, AfterViewIn
           Logger.debug('REC CHK_TARGET_CHANGE');
         }
       })
+      .on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
       .on('SYNCHRONIZE_FILE_LIST', event => {
         if (event.isSendFromSelf) { this.changeDetector.markForCheck(); }
       })

@@ -22,10 +22,11 @@ import { RemoteControllerComponent } from 'component/remote-controller/remote-co
 import { GmModeService } from 'service/gm-mode.service';
 
 @Component({
-  selector: 'game-object-inventory',
-  templateUrl: './game-object-inventory.component.html',
-  styleUrls: ['./game-object-inventory.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'game-object-inventory',
+    templateUrl: './game-object-inventory.component.html',
+    styleUrls: ['./game-object-inventory.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class GameObjectInventoryComponent implements OnInit, AfterViewInit, OnDestroy {
   inventoryTypes: string[] = ['table', 'common', 'graveyard'];
@@ -157,6 +158,7 @@ export class GameObjectInventoryComponent implements OnInit, AfterViewInit, OnDe
           this.changeDetector.markForCheck();
         }
       })
+      .on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
       .on('SYNCHRONIZE_FILE_LIST', event => {
         if (event.isSendFromSelf) this.changeDetector.markForCheck();
       })
@@ -472,7 +474,7 @@ export class GameObjectInventoryComponent implements OnInit, AfterViewInit, OnDe
 
   private showChatPalette(gameObject: GameCharacter) {
     let coordinate = this.pointerDeviceService.pointers[0];
-    let option: PanelOption = { left: coordinate.x - 250, top: coordinate.y - 175, width: 615, height: 350 };
+    let option: PanelOption = { left: coordinate.x - 250, top: Math.max(0, Math.min(coordinate.y - 280, window.innerHeight - 580)), width: 615, height: Math.min(560, Math.max(350, window.innerHeight - 60)) };
     let component = this.panelService.open<ChatPaletteComponent>(ChatPaletteComponent, option);
     component.character = gameObject;
   }

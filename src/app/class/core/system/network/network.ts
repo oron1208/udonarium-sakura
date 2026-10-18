@@ -164,8 +164,14 @@ export class Network {
     return this.connection ? this.connection.listAllPeers() : Promise.resolve([]);
   }
 
-  forceResync() {
-    if (this.connection && this.connection.forceResync) this.connection.forceResync();
+  forceResync(): boolean {
+    if (this.connection && this.connection.forceResync) return this.connection.forceResync();
+    return false;
+  }
+
+  manualSaveSnapshot(): boolean {
+    if (this.connection && this.connection.manualSaveSnapshot) return this.connection.manualSaveSnapshot();
+    return false;
   }
 
   private initializeConnection(): Connection {
@@ -183,6 +189,7 @@ export class Network {
     store.callback.onDisconnect = (peerId) => { if (this.callback.onDisconnect) this.callback.onDisconnect(peerId); }
     store.callback.onData = (peerId, data: any[]) => { if (this.callback.onData) this.callback.onData(peerId, data); }
     store.callback.onError = (peerId, errorType, errorMessage, errorObject) => { if (this.callback.onError) this.callback.onError(peerId, errorType, errorMessage, errorObject); }
+    store.callback.onPeerUnstable = (peerId, health) => { if (this.callback.onPeerUnstable) this.callback.onPeerUnstable(peerId, health); }
 
     if (0 < this.queue.size && this.sendInterval === null) this.sendInterval = setZeroTimeout(this.sendCallback);
 
@@ -191,6 +198,16 @@ export class Network {
 
   private async dynamicImport(mode: string = ''): Promise<ConnectionClass> {
     switch (mode) {
+      case 'websocket-relay':
+        return (await import(
+          /* webpackChunkName: "lib/backend/websocket-relay-connection" */
+          './websocket-relay-connection')
+        ).WebSocketRelayConnection;
+      case 'websocket-signaling':
+        return (await import(
+          /* webpackChunkName: "lib/backend/websocket-signaling-connection" */
+          './websocket-signaling-connection')
+        ).WebSocketSignalingConnection;
       case 'skyway2023':
       default:
         return (await import(

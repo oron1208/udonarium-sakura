@@ -1,3 +1,4 @@
+import { MediaCache } from './media-cache';
 import { EventSystem } from '../system';
 import { ResettableTimeout } from '../system/util/resettable-timeout';
 import { AudioFile, AudioFileContext, AudioState } from './audio-file';
@@ -15,6 +16,8 @@ export class AudioStorage {
 
   private lazyTimer!: ResettableTimeout;
   private hash: { [identifier: string]: AudioFile } = {};
+  /** サーバーに存在しないことが確定した音声identifier */
+  readonly missingOnServer: Set<string> = new Set();
 
   get audios(): AudioFile[] {
     let audios: AudioFile[] = [];
@@ -26,6 +29,18 @@ export class AudioStorage {
 
   private constructor() {
     Logger.debug('AudioStorage ready...');
+    EventSystem.register(this)
+      .on('SERVER_MEDIA_MISSING', event => {
+        if (event.data?.kind === 'audio' && event.data?.identifier) {
+          this.missingOnServer.add(event.data.identifier);
+          Logger.debug(`[AudioStorage] marked missing on server: ${event.data.identifier}`);
+        }
+      })
+      .on('MEDIA_REPLENISHED', event => {
+        if (event.data?.kind === 'audio' && event.data?.identifier) {
+          this.missingOnServer.delete(event.data.identifier);
+        }
+      });
   }
 
   private destroy() {
@@ -62,10 +77,14 @@ export class AudioStorage {
     if (AudioState.COMPLETE <= audio.state) {
       this.lazySynchronize(100);
       ServerMediaStorage.uploadAudio(audio);
+      void MediaCache.cacheAudio(audio);
     }
     if (this.update(audio)) {
       let stored = this.hash[audio.identifier];
-      if (AudioState.COMPLETE <= stored.state) ServerMediaStorage.uploadAudio(stored);
+      if (AudioState.COMPLETE <= stored.state) {
+        ServerMediaStorage.uploadAudio(stored);
+        void MediaCache.cacheAudio(stored);
+      }
       return stored;
     }
     this.hash[audio.identifier] = audio;
@@ -100,15 +119,17 @@ export class AudioStorage {
     return false;
   }
 
-  get(identifier: string): AudioFile {
+  get(identifier: string, autoFetch: boolean = true): AudioFile {
     let audio: AudioFile = this.hash[identifier];
     if (audio) return audio;
     if (/^[a-f0-9]{64}$/i.test(identifier || '')) {
       audio = AudioFile.createEmpty(identifier);
       this.hash[identifier] = audio;
-      ServerMediaStorage.fetchAudioOrNull(identifier).then(fetched => {
-        if (fetched) this.add(fetched);
-      });
+      if (autoFetch) {
+        MediaCache.fetchAudioWithCache(identifier).then(fetched => {
+          if (fetched.status === 'ok') this.add(fetched.file);
+        }).catch(() => { });
+      }
       return audio;
     }
     return null;

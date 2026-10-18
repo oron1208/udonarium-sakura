@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
 import { Logger } from '../../class/core/system/util/logger';
 
 import { ObjectStore } from '@udonarium/core/synchronize-object/object-store';
@@ -13,6 +13,7 @@ import { DiceSymbol } from '@udonarium/dice-symbol';
 import { GameTableMask } from '@udonarium/game-table-mask';
 import { Terrain } from '@udonarium/terrain';
 import { TabletopObject } from '@udonarium/tabletop-object';
+import { TableSelecter } from '@udonarium/table-selecter';
 
 import { PasswordCheckComponent } from 'component/password-check/password-check.component';
 import { RoomSettingComponent } from 'component/room-setting/room-setting.component';
@@ -20,11 +21,17 @@ import { ModalService } from 'service/modal.service';
 import { PanelService } from 'service/panel.service';
 
 @Component({
-  selector: 'lobby',
-  templateUrl: './lobby.component.html',
-  styleUrls: ['./lobby.component.css'],
+    selector: 'lobby',
+    templateUrl: './lobby.component.html',
+    styleUrls: ['./lobby.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class LobbyComponent implements OnInit, OnDestroy {
+  initialMediaBundleEnabled = (() => {
+    try { return localStorage.getItem('udonarium.initialMediaBundle.enabled.v1') === '1'; } catch (_) { return false; }
+  })();
+
   rooms: { alias: string, roomName: string, peerContexts: PeerContext[], isSavedEmptyRoom?: boolean }[] = [];
 
   isReloading: boolean = false;
@@ -41,7 +48,8 @@ export class LobbyComponent implements OnInit, OnDestroy {
 
   constructor(
     private panelService: PanelService,
-    private modalService: ModalService
+    private modalService: ModalService,
+    private changeDetector: ChangeDetectorRef
   ) { }
 
   ngOnInit() {
@@ -93,6 +101,8 @@ export class LobbyComponent implements OnInit, OnDestroy {
     });
     this.help = '接続可能なルームが見つかりませんでした。「新しいルームを作成する」で新規ルームを作成できます。';
     this.isReloading = false;
+    // zoneless: await完了後はCDが走らないため、一覧の更新を明示的にスケジュールする
+    this.changeDetector.markForCheck();
   }
 
   async connect(peerContexts: PeerContext[]) {
@@ -110,6 +120,7 @@ export class LobbyComponent implements OnInit, OnDestroy {
     // 部屋に入る前に、ロビー状態で作成されたコマ等をクリーンアップする
     // （ユドナリウム公式の「部屋未作成時にコマを作ると別の部屋に引き継がれる」現象の修正）
     this.cleanupTabletopObjectsBeforeJoin();
+    TableSelecter.instance.resetForRoomJoin();
 
     let userId = Network.peerContext ? Network.peerContext.userId : PeerContext.generateId();
     Network.open(userId, context.roomId, context.roomName, password);
@@ -197,4 +208,9 @@ export class LobbyComponent implements OnInit, OnDestroy {
     }
     ObjectStore.instance.clearDeleteHistory();
   }
+  toggleInitialMediaBundle(enabled: boolean) {
+    this.initialMediaBundleEnabled = !!enabled;
+    try { localStorage.setItem('udonarium.initialMediaBundle.enabled.v1', this.initialMediaBundleEnabled ? '1' : '0'); } catch (_) { }
+  }
+
 }

@@ -16,10 +16,11 @@ import { PanelService } from 'service/panel.service';
 import { ImageTag } from '@udonarium/image-tag';//本家PR #92より
 
 @Component({
-  selector: 'file-selector',
-  templateUrl: './file-selecter.component.html',
-  styleUrls: ['./file-selecter.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'file-selector',
+    templateUrl: './file-selecter.component.html',
+    styleUrls: ['./file-selecter.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class FileSelecterComponent implements OnInit, OnDestroy, AfterViewInit {
 
@@ -146,7 +147,8 @@ export class FileSelecterComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngAfterViewInit() {
-    EventSystem.register(this).on('SYNCHRONIZE_FILE_LIST', event => {
+    EventSystem.register(this).on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
+      .on('SYNCHRONIZE_FILE_LIST', event => {
       if (event.isSendFromSelf) {
         this.changeDetector.markForCheck();
       }

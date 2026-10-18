@@ -31,6 +31,9 @@ import { InputHandler } from 'directive/input-handler';
 import { MovableOption } from 'directive/movable.directive';
 import { RotableOption } from 'directive/rotable.directive';
 import { ContextMenuAction, ContextMenuSeparator, ContextMenuService } from 'service/context-menu.service';
+import { ModalService } from 'service/modal.service';
+import { MemoEditComponent } from 'component/memo-edit/memo-edit.component';
+import { DictPickerComponent } from 'component/dict-picker/dict-picker.component';
 import { PanelOption, PanelService } from 'service/panel.service';
 import { InitiativeDiceRollerComponent } from 'component/initiative-dice-roller/initiative-dice-roller.component';
 import { BatchDiceRollerComponent } from 'component/batch-dice-roller/batch-dice-roller.component';
@@ -45,28 +48,30 @@ import { TabletopUndoService } from 'service/tabletop-undo.service';
 import { TabletopSelectionService } from 'service/tabletop-selection.service';
 import { InitiativeService } from 'service/initiative.service';
 import { ChatMessageService } from 'service/chat-message.service';
+import { DictionaryService } from 'service/dictionary.service';
 
 @Component({
-  selector: 'game-character',
-  templateUrl: './game-character.component.html',
-  styleUrls: ['./game-character.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush,
-  animations: [
-    trigger('bounceInOut', [
-      transition('void => *', [
-        animate('600ms ease', keyframes([
-          style({ transform: 'scale3d(0, 0, 0)', offset: 0 }),
-          style({ transform: 'scale3d(1.5, 1.5, 1.5)', offset: 0.5 }),
-          style({ transform: 'scale3d(0.75, 0.75, 0.75)', offset: 0.75 }),
-          style({ transform: 'scale3d(1.125, 1.125, 1.125)', offset: 0.875 }),
-          style({ transform: 'scale3d(1.0, 1.0, 1.0)', offset: 1.0 })
-        ]))
-      ]),
-      transition('* => void', [
-        animate(100, style({ transform: 'scale3d(0, 0, 0)' }))
-      ])
-    ])
-  ]
+    selector: 'game-character',
+    templateUrl: './game-character.component.html',
+    styleUrls: ['./game-character.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    animations: [
+        trigger('bounceInOut', [
+            transition('void => *', [
+                animate('600ms ease', keyframes([
+                    style({ transform: 'scale3d(0, 0, 0)', offset: 0 }),
+                    style({ transform: 'scale3d(1.5, 1.5, 1.5)', offset: 0.5 }),
+                    style({ transform: 'scale3d(0.75, 0.75, 0.75)', offset: 0.75 }),
+                    style({ transform: 'scale3d(1.125, 1.125, 1.125)', offset: 0.875 }),
+                    style({ transform: 'scale3d(1.0, 1.0, 1.0)', offset: 1.0 })
+                ]))
+            ]),
+            transition('* => void', [
+                animate(100, style({ transform: 'scale3d(0, 0, 0)' }))
+            ])
+        ])
+    ],
+    standalone: false
 })
 export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit, OnChanges {
   private static readonly SIMPLE_VIEW_FULL_STORAGE_KEY = 'udonarium.character.simpleView.full.v1';
@@ -178,6 +183,12 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
   private directionMarkerRotated: boolean = false;
   private flatIconNaturalWidth: number = 0;
   private flatIconNaturalHeight: number = 0;
+  // Table zoom is a CSS 3D transform, not a layout resize. A thumbnail made
+  // at the untransformed token size stays blurry at every subsequent zoom.
+  // Keep the original source for all token modes, shadows and flash overlays.
+  get komaDisplayImageUrl(): string {
+    return this.imageFile?.url || '';
+  }
 
   get flatIconImageStyle(): { [key: string]: string } {
     const mode = this.resolveFlatIconFitMode();
@@ -246,7 +257,7 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
   }
 
   get chatBubbleAltitude(): number {
-/*
+    /*
     let cos =  Math.cos(this.roll * Math.PI / 180);
     let sin = Math.abs(Math.sin(this.roll * Math.PI / 180));
     if (cos < 0.5) cos = 0.5;
@@ -263,6 +274,7 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
   constructor(
     private ngZone: NgZone,
     private contextMenuService: ContextMenuService,
+    private modalService: ModalService,
     private elementRef: ElementRef<HTMLElement>,
     private panelService: PanelService,
     private changeDetector: ChangeDetectorRef,
@@ -273,7 +285,31 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
     private tabletopSelectionService: TabletopSelectionService,
     private initiativeService: InitiativeService,
     private chatMessageService: ChatMessageService,
+    private dictionaryService: DictionaryService,
   ) { }
+
+  @HostListener('dragover', ['$event'])
+  onDictPaletteDragOver(e: DragEvent) {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('text/lycoris-dict-palette')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  }
+
+  @HostListener('drop', ['$event'])
+  onDictPaletteDrop(e: DragEvent) {
+    const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : [];
+    if (!types.includes('text/lycoris-dict-palette')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const id = e.dataTransfer?.getData('text/lycoris-dict-palette');
+    const entry = id ? this.dictionaryService.getPalette(id) : null;
+    if (!entry || !this.gameCharacter) return;
+    // ドロップでの適用は「追記」。置換は辞書パネルのボタンで行う
+    this.dictionaryService.applyPaletteToCharacter(entry, this.gameCharacter, 'append');
+    SoundEffect.play(PresetSound.sweep);
+    this.changeDetector.markForCheck();
+  }
 
   ngOnChanges() {
     this.movableOption = {
@@ -314,6 +350,7 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
           this.changeDetector.markForCheck();
         }
       })
+      .on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
       .on('SYNCHRONIZE_FILE_LIST', event => {
         this.changeDetector.markForCheck();
       })
@@ -433,6 +470,7 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
     this.input.onStart = this.onInputStart.bind(this);
   }
 
+
   ngOnDestroy() {
     this.stopDirectionMarkerRotate();
     this.input.destroy();
@@ -456,6 +494,25 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
     }
   }
 
+  get memo(): string { return this.gameCharacter ? (this.gameCharacter.memo || '') : ''; }
+
+  editMemo() {
+    const character = this.gameCharacter;
+    this.modalService.open(MemoEditComponent, { title: `${character.name} のメモ`, width: 420, memo: character.memo })
+      .then(value => {
+        if (value == null) return;
+        character.memo = String(value);
+        character.update();
+      });
+  }
+
+  /** 右クリック「辞書に登録」: 登録先コマ辞書を選んで登録する（行き先が分かるように） */
+  async openDictRegister() {
+    const dicts = this.dictionaryService.collectionsOfType('characters');
+    if (!dicts.length) return;
+    await this.modalService.open(DictPickerComponent, { title: '辞書に登録', width: 420, character: this.gameCharacter });
+  }
+
   @HostListener('contextmenu', ['$event'])
   onContextMenu(e: Event) {
     e.stopPropagation();
@@ -471,6 +528,9 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
     }
 
     this.contextMenuService.open(position, [
+      { name: 'メモを編集', action: () => this.editMemo() },
+      { name: '辞書に登録', action: () => this.openDictRegister() },
+      ContextMenuSeparator,
       ...(this.isAdvancedRoom ? [
         (this.isMyPiece
           ? { name: '☑ 自分のコマ', action: () => this.toggleMyPiece(false) }
@@ -523,11 +583,11 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
               name: '☑ 影の表示', action: () => {
                 this.isDropShadow = false;
                 SoundEffect.play(PresetSound.sweep);
-               EventSystem.trigger('UPDATE_INVENTORY', null);
-               }
+                EventSystem.trigger('UPDATE_INVENTORY', null);
+              }
             } : {
               name: '☐ 影の表示', action: () => {
-               this.isDropShadow = true;
+                this.isDropShadow = true;
                 SoundEffect.play(PresetSound.sweep);
                 EventSystem.trigger('UPDATE_INVENTORY', null);
               },
@@ -558,7 +618,7 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
           SoundEffect.play(PresetSound.sweep);
         }
       },
-/*
+      /*
       {
         name: '削除', action: () => {
           Logger.debug("円柱_削除実行_キャラコマ");
@@ -812,16 +872,16 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
       },
       ContextMenuSeparator,
       ...(this.isAdvancedRoom ? [
-      {
-        name: '🎲 イニシアチブロール', action: null, subActions: [
-          { name: '📋 登録式でロール', action: () => this.rollInitiativeBatchByFormula(characters) },
-          { name: '✏️ 手入力でロール...', action: () => this.openInitiativeDiceRoller(characters) },
-        ]
-      },
-      ContextMenuSeparator,
-      {
-        name: '🎲 ダイス一括ロール', action: () => this.openBatchDiceRoller(characters)
-      },
+        {
+          name: '🎲 イニシアチブロール', action: null, subActions: [
+            { name: '📋 登録式でロール', action: () => this.rollInitiativeBatchByFormula(characters) },
+            { name: '✏️ 手入力でロール...', action: () => this.openInitiativeDiceRoller(characters) },
+          ]
+        },
+        ContextMenuSeparator,
+        {
+          name: '🎲 ダイス一括ロール', action: () => this.openBatchDiceRoller(characters)
+        },
       ] : []),
     ];
 
@@ -1270,7 +1330,7 @@ export class GameCharacterComponent implements OnInit, OnDestroy, AfterViewInit,
 
   private showChatPalette(gameObject: GameCharacter) {
     let coordinate = this.pointerDeviceService.pointers[0];
-    let option: PanelOption = { left: coordinate.x - 250, top: coordinate.y - 175, width: 615, height: 350 };
+    let option: PanelOption = { left: coordinate.x - 250, top: Math.max(0, Math.min(coordinate.y - 280, window.innerHeight - 580)), width: 615, height: Math.min(560, Math.max(350, window.innerHeight - 60)) };
     let component = this.panelService.open<ChatPaletteComponent>(ChatPaletteComponent, option);
     component.character = gameObject;
   }

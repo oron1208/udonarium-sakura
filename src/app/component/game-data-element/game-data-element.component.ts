@@ -29,10 +29,11 @@ import { SafeHtml, DomSanitizer } from '@angular/platform-browser';
 import { GameCharacter } from '@udonarium/game-character';
 
 @Component({
-  selector: 'game-data-element, [game-data-element]',
-  templateUrl: './game-data-element.component.html',
-  styleUrls: ['./game-data-element.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'game-data-element, [game-data-element]',
+    templateUrl: './game-data-element.component.html',
+    styleUrls: ['./game-data-element.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class GameDataElementComponent implements OnInit, OnDestroy, AfterViewInit {
   @Input() gameDataElement: DataElement = null;
@@ -124,7 +125,7 @@ export class GameDataElementComponent implements OnInit, OnDestroy, AfterViewIni
     let icon = root.getElementsByName('ICON');
     if(icon){
       icon[0].value = image.children.length - 1;
-      if( icon[0].currentValue > icon[0].value ) icon[0].currentValue = icon[0].value;
+      if( Number(icon[0].currentValue) > icon[0].value ) icon[0].currentValue = icon[0].value;
     }
   }
 

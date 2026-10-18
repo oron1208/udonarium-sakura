@@ -32,10 +32,11 @@ const ua = window.navigator.userAgent.toLowerCase();
 const isiOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1 || ua.indexOf('macintosh') > -1 && 'ontouchend' in document;
 
 @Component({
-  selector: 'chat-tab',
-  templateUrl: './chat-tab.component.html',
-  styleUrls: ['./chat-tab.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush,
+    selector: 'chat-tab',
+    templateUrl: './chat-tab.component.html',
+    styleUrls: ['./chat-tab.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class ChatTabComponent implements OnInit, AfterViewInit, OnDestroy, OnChanges, AfterViewChecked {
   sampleMessages: ChatMessageContext[] = [
@@ -239,6 +240,41 @@ export class ChatTabComponent implements OnInit, AfterViewInit, OnDestroy, OnCha
 
   trackByChatMessage(index: number, message: ChatMessage) {
     return message.identifier;
+  }
+
+  /** 検索ジャンプ用: 指定メッセージが含まれる範囲を仮想スクロールの描画範囲にする */
+  jumpToMessageByIdentifier(msgIdentifier: string): boolean {
+    if (!this.chatTab) return false;
+    const messages = this.chatTab.chatMessages;
+    const index = messages.findIndex(m => m.identifier === msgIdentifier);
+    if (index < 0) return false;
+    const scroller = this.panelService.scrollablePanel;
+    const displayCount = Math.ceil((scroller.clientHeight + 1200) / this.minMessageHeight);
+    this.scrollEventShortTimer?.stop();
+    this.scrollEventLongTimer?.stop();
+    this.topElm = this.bottomElm = null;
+    this.topIndex = Math.max(0, index - displayCount);
+    this.bottomIndex = Math.min(messages.length - 1, index + displayCount);
+    this.needUpdate = true;
+    // markForCheck だけだと描画待ちの間に旧位置から仮想範囲が再計算されてしまう。
+    this.changeDetector.detectChanges();
+    const el = this.messageContainerRef.nativeElement.querySelector<HTMLElement>(`chat-message[data-message-id="${msgIdentifier}"]`);
+    if (!el) return false;
+    const tab = this.chatTab;
+    const align = () => {
+      if (this.chatTab !== tab || !el.isConnected) return;
+      const viewport = scroller.getBoundingClientRect();
+      const sticky = scroller.querySelector<HTMLElement>('.sticky-bottom')?.getBoundingClientRect();
+      const visibleBottom = sticky ? Math.min(viewport.bottom, sticky.top) : viewport.bottom;
+      const rect = el.getBoundingClientRect();
+      scroller.scrollTop += rect.top - viewport.top - Math.max(0, (visibleBottom - viewport.top - rect.height) / 2);
+      this.preScrollTop = scroller.scrollTop;
+      this.scrollSpeed = 0;
+    };
+    align();
+    // 仮想範囲の周辺行追加・アンカー補正（33/66ms）が終わった位置で再整列する。
+    setTimeout(align, 120);
+    return true;
   }
 
   private adjustIndex() {

@@ -1,4 +1,4 @@
-import { Component, Input, OnInit, ChangeDetectorRef } from '@angular/core';
+import { Component, Input, OnInit, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
 
 import { ModalService } from 'service/modal.service';
 import { PanelService } from 'service/panel.service';
@@ -16,9 +16,11 @@ import { DiceBot } from '@udonarium/dice-bot';
 import { ObjectStore } from '@udonarium/core/synchronize-object/object-store';
 
 @Component({
-  selector: 'game-character-buff-view',
-  templateUrl: './game-character-buff-view.component.html',
-  styleUrls: ['./game-character-buff-view.component.css']
+    selector: 'game-character-buff-view',
+    templateUrl: './game-character-buff-view.component.html',
+    styleUrls: ['./game-character-buff-view.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class GameCharacterBuffViewComponent implements OnInit {
 

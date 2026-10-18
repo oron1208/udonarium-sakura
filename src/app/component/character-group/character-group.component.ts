@@ -50,26 +50,27 @@ import { InitiativeService } from 'service/initiative.service';
 import { ChatMessageService } from 'service/chat-message.service';
 
 @Component({
-  selector: 'character-group',
-  templateUrl: './character-group.component.html',
-  styleUrls: ['./character-group.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush,
-  animations: [
-    trigger('bounceInOut', [
-      transition('void => *', [
-        animate('600ms ease', keyframes([
-          style({ transform: 'scale3d(0, 0, 0)', offset: 0 }),
-          style({ transform: 'scale3d(1.5, 1.5, 1.5)', offset: 0.5 }),
-          style({ transform: 'scale3d(0.75, 0.75, 0.75)', offset: 0.75 }),
-          style({ transform: 'scale3d(1.125, 1.125, 1.125)', offset: 0.875 }),
-          style({ transform: 'scale3d(1.0, 1.0, 1.0)', offset: 1.0 })
-        ]))
-      ]),
-      transition('* => void', [
-        animate(100, style({ transform: 'scale3d(0, 0, 0)' }))
-      ])
-    ])
-  ]
+    selector: 'character-group',
+    templateUrl: './character-group.component.html',
+    styleUrls: ['./character-group.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    animations: [
+        trigger('bounceInOut', [
+            transition('void => *', [
+                animate('600ms ease', keyframes([
+                    style({ transform: 'scale3d(0, 0, 0)', offset: 0 }),
+                    style({ transform: 'scale3d(1.5, 1.5, 1.5)', offset: 0.5 }),
+                    style({ transform: 'scale3d(0.75, 0.75, 0.75)', offset: 0.75 }),
+                    style({ transform: 'scale3d(1.125, 1.125, 1.125)', offset: 0.875 }),
+                    style({ transform: 'scale3d(1.0, 1.0, 1.0)', offset: 1.0 })
+                ]))
+            ]),
+            transition('* => void', [
+                animate(100, style({ transform: 'scale3d(0, 0, 0)' }))
+            ])
+        ])
+    ],
+    standalone: false
 })
 export class CharacterGroupComponent implements OnInit, OnDestroy, AfterViewInit, OnChanges {
   private static readonly SIMPLE_VIEW_FULL_STORAGE_KEY = 'udonarium.character.simpleView.full.v1';
@@ -187,6 +188,12 @@ export class CharacterGroupComponent implements OnInit, OnDestroy, AfterViewInit
   private directionMarkerRotated: boolean = false;
   private flatIconNaturalWidth: number = 0;
   private flatIconNaturalHeight: number = 0;
+  // Table zoom is a CSS 3D transform, not a layout resize. A thumbnail made
+  // at the untransformed token size stays blurry at every subsequent zoom.
+  // Keep the original source for all token modes, shadows and flash overlays.
+  get komaDisplayImageUrl(): string {
+    return this.imageFile?.url || '';
+  }
 
   get flatIconImageStyle(): { [key: string]: string } {
     const mode = this.resolveFlatIconFitMode();
@@ -255,7 +262,7 @@ export class CharacterGroupComponent implements OnInit, OnDestroy, AfterViewInit
   }
 
   get chatBubbleAltitude(): number {
-/*
+    /*
     let cos =  Math.cos(this.roll * Math.PI / 180);
     let sin = Math.abs(Math.sin(this.roll * Math.PI / 180));
     if (cos < 0.5) cos = 0.5;
@@ -323,6 +330,7 @@ export class CharacterGroupComponent implements OnInit, OnDestroy, AfterViewInit
           this.changeDetector.markForCheck();
         }
       })
+      .on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
       .on('SYNCHRONIZE_FILE_LIST', event => {
         this.changeDetector.markForCheck();
       })
@@ -442,6 +450,7 @@ export class CharacterGroupComponent implements OnInit, OnDestroy, AfterViewInit
     this.input.onStart = this.onInputStart.bind(this);
   }
 
+
   ngOnDestroy() {
     this.stopDirectionMarkerRotate();
     this.input.destroy();
@@ -534,11 +543,11 @@ export class CharacterGroupComponent implements OnInit, OnDestroy, AfterViewInit
               name: '☑ 影の表示', action: () => {
                 this.isDropShadow = false;
                 SoundEffect.play(PresetSound.sweep);
-               EventSystem.trigger('UPDATE_INVENTORY', null);
-               }
+                EventSystem.trigger('UPDATE_INVENTORY', null);
+              }
             } : {
               name: '☐ 影の表示', action: () => {
-               this.isDropShadow = true;
+                this.isDropShadow = true;
                 SoundEffect.play(PresetSound.sweep);
                 EventSystem.trigger('UPDATE_INVENTORY', null);
               },
@@ -569,7 +578,7 @@ export class CharacterGroupComponent implements OnInit, OnDestroy, AfterViewInit
           SoundEffect.play(PresetSound.sweep);
         }
       },
-/*
+      /*
       {
         name: '削除', action: () => {
           Logger.debug("円柱_削除実行_キャラコマ");
@@ -823,16 +832,16 @@ export class CharacterGroupComponent implements OnInit, OnDestroy, AfterViewInit
       },
       ContextMenuSeparator,
       ...(this.isAdvancedRoom ? [
-      {
-        name: '🎲 イニシアチブロール', action: null, subActions: [
-          { name: '📋 登録式でロール', action: () => this.rollInitiativeBatchByFormula(characters) },
-          { name: '✏️ 手入力でロール...', action: () => this.openInitiativeDiceRoller(characters) },
-        ]
-      },
-      ContextMenuSeparator,
-      {
-        name: '🎲 ダイス一括ロール', action: () => this.openBatchDiceRoller(characters)
-      },
+        {
+          name: '🎲 イニシアチブロール', action: null, subActions: [
+            { name: '📋 登録式でロール', action: () => this.rollInitiativeBatchByFormula(characters) },
+            { name: '✏️ 手入力でロール...', action: () => this.openInitiativeDiceRoller(characters) },
+          ]
+        },
+        ContextMenuSeparator,
+        {
+          name: '🎲 ダイス一括ロール', action: () => this.openBatchDiceRoller(characters)
+        },
       ] : []),
     ];
 
@@ -1563,7 +1572,7 @@ export class CharacterGroupComponent implements OnInit, OnDestroy, AfterViewInit
 
   private showChatPalette(gameObject: GameCharacter) {
     let coordinate = this.pointerDeviceService.pointers[0];
-    let option: PanelOption = { left: coordinate.x - 250, top: coordinate.y - 175, width: 615, height: 350 };
+    let option: PanelOption = { left: coordinate.x - 250, top: Math.max(0, Math.min(coordinate.y - 280, window.innerHeight - 580)), width: 615, height: Math.min(560, Math.max(350, window.innerHeight - 60)) };
     let component = this.panelService.open<ChatPaletteComponent>(ChatPaletteComponent, option);
     component.character = gameObject;
   }

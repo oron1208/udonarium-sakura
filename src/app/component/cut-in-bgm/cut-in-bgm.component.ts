@@ -1,4 +1,4 @@
-import { Component, NgZone, OnDestroy, OnInit } from '@angular/core';
+import { Component, NgZone, OnDestroy, OnInit, ChangeDetectionStrategy } from '@angular/core';
 import { Logger } from '../../class/core/system/util/logger';
 
 import { AudioFile } from '@udonarium/core/file-storage/audio-file';
@@ -15,9 +15,11 @@ import { PointerDeviceService } from 'service/pointer-device.service';
 import { PanelOption, PanelService } from 'service/panel.service';
 
 @Component({
-  selector: 'app-cut-in-bgm',
-  templateUrl: './cut-in-bgm.component.html',
-  styleUrls: ['./cut-in-bgm.component.css']
+    selector: 'app-cut-in-bgm',
+    templateUrl: './cut-in-bgm.component.html',
+    styleUrls: ['./cut-in-bgm.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class CutInBgmComponent implements OnInit, OnDestroy {
 

@@ -21,10 +21,11 @@ import { ImageFile } from '@udonarium/core/file-storage/image-file';
 import { ImageStorage } from '@udonarium/core/file-storage/image-storage';
 
 @Component({
-  selector: 'import-character-img',
-  templateUrl: './import-character-img.component.html',
-  styleUrls: ['./import-character-img.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'import-character-img',
+    templateUrl: './import-character-img.component.html',
+    styleUrls: ['./import-character-img.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class ImportCharacterImgComponent implements OnInit, OnDestroy, AfterViewInit {
 
@@ -108,7 +109,7 @@ export class ImportCharacterImgComponent implements OnInit, OnDestroy, AfterView
         let icon = root.getElementsByName('ICON');
         if(icon){
           icon[0].value = distImageDataElement.children.length - 1;
-          if( icon[0].currentValue > icon[0].value ) icon[0].currentValue = icon[0].value;
+          if( Number(icon[0].currentValue) > icon[0].value ) icon[0].currentValue = icon[0].value;
         }
 
       }

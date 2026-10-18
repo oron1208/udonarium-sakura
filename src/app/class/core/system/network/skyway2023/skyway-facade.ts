@@ -75,6 +75,20 @@ export class SkyWayFacade {
     }
   }
 
+  /**
+   * 期待しない退室・輸送断線など、SDKが接続を破綻扱いすべき状態になったときに
+   * isOpenを確実にfalseへ倒してonCloseを通知する。
+   * AutoReconnect（isOpen=false 8秒継続）を発火させるための経路。
+   */
+  markBroken(reason: string) {
+    if (this.isDestroyed) return;
+    Logger.warn(`[SkyWay] connection broken: ${reason}`);
+    if (this.isOpen) {
+      this.close();
+      if (this.onClose) this.onClose(this.peer);
+    }
+  }
+
   private async createContext() {
     await this.disposeContext();
     if (this.isDestroyed) return;
@@ -91,7 +105,22 @@ export class SkyWayFacade {
       return;
     }
 
-    let context = await SkyWayContext.Create(authToken);
+    let context = await SkyWayContext.Create(authToken, {
+      rtcConfig: {
+        turnPolicy: 'enable',
+        turnProtocol: 'all',
+        stunPolicy: 'enable',
+        stunPorts: [443, 3478],
+      },
+      token: {
+        updateRemindSec: 120,
+      },
+      member: {
+        keepaliveIntervalSec: 30,
+        keepaliveIntervalGapSec: 10,
+        preventAutoLeaveOnBeforeUnload: false,
+      },
+    });
     context.onTokenUpdateReminder.add(async () => {
       Logger.debug(`skyWay onTokenUpdateReminder ${new Date().toISOString()}`);
       let authToken = await backend.createSkyWayAuthToken(channelName, this.peer.peerId);
@@ -174,7 +203,8 @@ export class SkyWayFacade {
 
     Logger.debug(`lobbyPerson join <${this.lobby.name}>`);
     lobbyPerson.onLeft.add(() => {
-      Logger.debug(`lobbyPerson onClosed`);
+      Logger.debug(`lobbyPerson onLeft`);
+      this.markBroken('lobbyPerson left unexpectedly');
     });
 
     lobbyPerson.onFatalError.add(err => {
@@ -222,6 +252,11 @@ export class SkyWayFacade {
 
     Logger.debug(`roomPerson join <${this.room.name}>`);
 
+    roomPerson.onLeft.add(() => {
+      Logger.warn('roomPerson onLeft (unexpected)');
+      this.markBroken('roomPerson left unexpectedly');
+    });
+
     roomPerson.onFatalError.add(err => {
       Logger.error('roomPerson onFatalError', err);
       if (this.isOpen) {
@@ -239,11 +274,11 @@ export class SkyWayFacade {
     let dataStream = await SkyWayStreamFactory.createDataStream();
     let publication = await this.roomPerson.publish(dataStream, { metadata: 'udonarium-data-stream' });
 
-    publication.onSubscribed.add(event => {
+    publication.onSubscribed.add(async event => {
       Logger.debug(`publication onSubscribed ${event.subscription.subscriber.name}`);
       let peerId = event.subscription.subscriber.name;
       if (peerId == null) {
-        event.subscription.cancel();
+        await this.cancelSubscription(event.subscription);
         return;
       }
 
@@ -323,7 +358,47 @@ export class SkyWayFacade {
     this.publication = null;
 
     if (!publication) return;
-    await publication.cancel();
+    await this.cancelPublication(publication);
+  }
+
+  /**
+   * SkyWay SDK v1/v2 互換の購読解除。
+   * v1: subscription.cancel()
+   * v2: subscription.unsubscribe() または member.unsubscribe(subscription.id)
+   */
+  private async cancelSubscription(subscription: Subscription) {
+    const anySubscription = subscription as any;
+    if (typeof anySubscription.cancel === 'function') {
+      await anySubscription.cancel();
+      return;
+    }
+    if (typeof anySubscription.unsubscribe === 'function') {
+      await anySubscription.unsubscribe();
+      return;
+    }
+    if (this.roomPerson && typeof (this.roomPerson as any).unsubscribe === 'function') {
+      await (this.roomPerson as any).unsubscribe(anySubscription.id);
+    }
+  }
+
+  /**
+   * SkyWay SDK v1/v2 互換の公開解除。
+   * v1: publication.cancel()
+   * v2: publication.unpublish() または member.unpublish(publication.id)
+   */
+  private async cancelPublication(publication: Publication<LocalDataStream>) {
+    const anyPublication = publication as any;
+    if (typeof anyPublication.cancel === 'function') {
+      await anyPublication.cancel();
+      return;
+    }
+    if (typeof anyPublication.unpublish === 'function') {
+      await anyPublication.unpublish();
+      return;
+    }
+    if (this.roomPerson && typeof (this.roomPerson as any).unpublish === 'function') {
+      await (this.roomPerson as any).unpublish(anyPublication.id);
+    }
   }
 
   async listAllPeers(): Promise<string[]> {

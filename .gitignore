@@ -1,17 +1,22 @@
-# Compiled output
+# See http://help.github.com/ignore-files/ for more about ignoring files.
+
+# compiled output
 /dist
 /tmp
 /out-tsc
+/.angular
+# Only exists if Bazel was run
 /bazel-out
 
-# Node
+# dependencies
 /node_modules
-npm-debug.log
-yarn-error.log
 
-# IDE
-.idea/
-.vscode/
+# profiling files
+chrome-profiler-events*.json
+speed-measure-plugin*.json
+
+# IDEs and editors
+/.idea
 .project
 .classpath
 .c9/
@@ -19,24 +24,49 @@ yarn-error.log
 .settings/
 *.sublime-workspace
 
-# Angular
-.angular/cache/
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.history/*
 
-# Misc
-.Dots
-.sass-cache/
+# misc
+/.sass-cache
 /connect.lock
 /coverage
 /libpeerconnection.log
+npm-debug.log
+yarn-error.log
 testem.log
 /typings
 
-# System
+# System Files
 .DS_Store
 Thumbs.db
+/src/assets/config.yaml
+/src/assets/config.yaml
+/src/assets/config.yaml
+data/
+node_modules/
+dist/
 
-# SkyWay credentials (never commit!)
-sakura/php/config.local.php
+# Room data backups (too large for GitHub)
+data/rooms/*.backup*
 
-# Cypress (removed but just in case)
-/cypress
+# Secrets & certs
+.env
+*.pem
+*.key
+*token*
+*password*
+*secret*
+VPSサーバー設定/
+ローカルサーバー設定/
+data/
+backups/*.pem.bak
+検証ファイル/
+
+# セルフホスト配布ZIPは公式サイト（VPS）からのみ配信
+/docs-site/downloads/

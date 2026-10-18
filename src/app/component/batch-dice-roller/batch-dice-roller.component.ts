@@ -1,4 +1,4 @@
-import { Component, Input, NgZone, OnDestroy, OnInit } from '@angular/core';
+import { Component, Input, NgZone, OnDestroy, OnInit, ChangeDetectionStrategy } from '@angular/core';
 import { ObjectStore } from '@udonarium/core/synchronize-object/object-store';
 import { GameCharacter } from '@udonarium/game-character';
 import { GameTable } from '@udonarium/game-table';
@@ -30,9 +30,11 @@ interface DiceSummary {
 }
 
 @Component({
-  selector: 'batch-dice-roller',
-  templateUrl: './batch-dice-roller.component.html',
-  styleUrls: ['./batch-dice-roller.component.css']
+    selector: 'batch-dice-roller',
+    templateUrl: './batch-dice-roller.component.html',
+    styleUrls: ['./batch-dice-roller.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class BatchDiceRollerComponent implements OnInit, OnDestroy {
   @Input() characters: GameCharacter[] = [];
