@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, ViewChild, ChangeDetectionStrategy } from '@angular/core';
 
 import { EventSystem, Network } from '@udonarium/core/system';
 import { PeerContext } from '@udonarium/core/system/network/peer-context';
@@ -7,9 +7,11 @@ import { ModalService } from 'service/modal.service';
 import { PanelService } from 'service/panel.service';
 
 @Component({
-  selector: 'password-check',
-  templateUrl: './password-check.component.html',
-  styleUrls: ['./password-check.component.css']
+    selector: 'password-check',
+    templateUrl: './password-check.component.html',
+    styleUrls: ['./password-check.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class PasswordCheckComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('passwordInput', { static: true }) passwordInputElementRef!: ElementRef<HTMLInputElement>;

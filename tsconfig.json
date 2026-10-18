@@ -2,22 +2,20 @@
 {
   "compileOnSave": false,
   "compilerOptions": {
+    "strict": false,
+    "skipLibCheck": true,
+    "ignoreDeprecations": "6.0",
+    "esModuleInterop": true,
     "baseUrl": "./",
     "outDir": "./dist/out-tsc",
     "sourceMap": true,
     "declaration": false,
-    "downlevelIteration": true,
     "experimentalDecorators": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "importHelpers": true,
-    "allowSyntheticDefaultImports": true,
-    "target": "es2017",
+    "target": "ES2022",
     "module": "es2020",
-    "lib": [
-      "es2020",
-      "dom"
-    ],
     "paths": {
       "@udonarium/*": [
         "src/app/class/*"
@@ -35,5 +33,6 @@
         "src/app/service/*"
       ]
     },
+    "useDefineForClassFields": false
   }
 }

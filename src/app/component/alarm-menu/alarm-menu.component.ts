@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit, AfterViewInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, AfterViewInit, ChangeDetectionStrategy } from '@angular/core';
 
 import { SyncObject, SyncVar } from '@udonarium/core/synchronize-object/decorator';
 import { GameObject, ObjectContext } from '@udonarium/core/synchronize-object/game-object';
@@ -21,9 +21,11 @@ import { Vote, VoteContext } from '@udonarium/vote';
 
 
 @Component({
-  selector: 'app-alarm-menu',
-  templateUrl: './alarm-menu.component.html',
-  styleUrls: ['./alarm-menu.component.css']
+    selector: 'app-alarm-menu',
+    templateUrl: './alarm-menu.component.html',
+    styleUrls: ['./alarm-menu.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class AlarmMenuComponent implements OnInit, OnDestroy, AfterViewInit {
 

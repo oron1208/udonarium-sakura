@@ -21,6 +21,7 @@ import { ObjectStore } from '@udonarium/core/synchronize-object/object-store';
 import { EventSystem, Network } from '@udonarium/core/system';
 
 import { GameCharacter } from '@udonarium/game-character';
+import { GameTable } from '@udonarium/game-table';
 import { GameTableMask } from '@udonarium/game-table-mask';
 import { PresetSound, SoundEffect } from '@udonarium/sound-effect';
 import { GameCharacterSheetComponent } from 'component/game-character-sheet/game-character-sheet.component';
@@ -42,38 +43,35 @@ import { xor } from 'lodash';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
 @Component({
-  selector: 'game-table-mask',
-  templateUrl: './game-table-mask.component.html',
-  styleUrls: ['./game-table-mask.component.css'],
-  animations: [
-    trigger('fadeInOut', [
-    
-      transition('void => *', [
-        animate('132ms ease-out', keyframes([
-          style({ opacity: 0, offset: 0 }),
-          style({ opacity: 1, offset: 1.0 })
-        ]))
-      ]),
-      transition('* => void', [
-        animate('132ms ease-in', keyframes([
-          style({ opacity: 1, offset: 0 }),
-          style({ opacity: 0, offset: 1.0 })
-        ]))
-      ])
-
-    ]),
-    trigger('rotateInOut', [
-
-      transition('scrached<=>restore', [
-        animate('132ms ease-in-out', keyframes([
-          style({ transform: 'rotateY(0deg)', offset: 0.0 }),
-          style({ transform: 'rotateY(-90deg)', offset: 1.0 })
-        ]))
-      ])
-
-    ]),
-  ],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'game-table-mask',
+    templateUrl: './game-table-mask.component.html',
+    styleUrls: ['./game-table-mask.component.css'],
+    animations: [
+        trigger('fadeInOut', [
+            transition('void => *', [
+                animate('132ms ease-out', keyframes([
+                    style({ opacity: 0, offset: 0 }),
+                    style({ opacity: 1, offset: 1.0 })
+                ]))
+            ]),
+            transition('* => void', [
+                animate('132ms ease-in', keyframes([
+                    style({ opacity: 1, offset: 0 }),
+                    style({ opacity: 0, offset: 1.0 })
+                ]))
+            ])
+        ]),
+        trigger('rotateInOut', [
+            transition('scrached<=>restore', [
+                animate('132ms ease-in-out', keyframes([
+                    style({ transform: 'rotateY(0deg)', offset: 0.0 }),
+                    style({ transform: 'rotateY(-90deg)', offset: 1.0 })
+                ]))
+            ])
+        ]),
+    ],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 
 export class GameTableMaskComponent implements OnChanges, OnDestroy, AfterViewInit {
@@ -189,23 +187,34 @@ export class GameTableMaskComponent implements OnChanges, OnDestroy, AfterViewIn
     return ret;
   }
 
+  /** テンプレートの @for track 用キー（座標で固定し、状態変化時に要素を再利用して回転アニメを発火させる） */
+  identify(index: number, gridInfo: { x: number, y: number, state: string }): string {
+    return gridInfo.x + ':' + gridInfo.y;
+  }
+
   get operateOpacity(): number {
     if (this.isLightAreaMask) {
       return this.gmModeService.isGm ? 0.25 : 0.12;
     }
 
     if (this.isLightReactiveMask) {
-      const roleRate = this.gmModeService.isGm ? 0.35 : 1;
+      const roleRate = this.maskPeekRoleRate;
       const ret = this.opacity * ((this.gameTableMask.isMine) ? 0.6 : 1) * roleRate;
       return (ret < 0.4 && this.isScratching) ? 0.4 : ret;
     }
 
-    // GM mode: GM sees masks semi-transparent so they can peek through.
-    // PL/non-GM always sees masks as solid black/opaque.
-    // Per-mask gmOnly/plOnly labels are kept for compatibility, but GM mode wins here.
-    const roleRate = this.gmModeService.isGm ? 0.35 : 1;
+    // GM sees masks opaque like the PL view by default.
+    // When the table setting gmMaskPeek is ON, GM sees them semi-transparent to peek through.
+    const roleRate = this.maskPeekRoleRate;
     const ret = this.opacity * ((this.gameTableMask.isMine) ? 0.6 : 1) * roleRate;
     return (ret < 0.4 && this.isScratching) ? 0.4 : ret;
+  }
+
+  /** GM覗き見: テーブル設定 gmMaskPeek がONのときだけGMのマスクを半透明にする（既定はPLと同じ不透明） */
+  private get maskPeekRoleRate(): number {
+    if (!this.gmModeService.isGm) return 1;
+    const table = ObjectStore.instance.getObjects<GameTable>(GameTable).find(t => t.selected);
+    return table?.gmMaskPeek ? 0.35 : 1;
   }
 
   get altitude(): number { return this.gameTableMask.altitude; }
@@ -279,6 +288,7 @@ export class GameTableMaskComponent implements OnChanges, OnDestroy, AfterViewIn
       .on('CHANGE_GM_MODE', event => {
         this.changeDetector.markForCheck();
       })
+      .on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
       .on('SYNCHRONIZE_FILE_LIST', event => {
         this.changeDetector.markForCheck();
       })
@@ -319,6 +329,9 @@ export class GameTableMaskComponent implements OnChanges, OnDestroy, AfterViewIn
           this.followAttachedCharacter();
           this.scheduleCanvasRender();
           this.changeDetector.markForCheck();
+        } else if (event.data.aliasName === 'game-table') {
+          // テーブル設定（gmMaskPeek等）の更新でマスクの透明度を再評価する
+          this.changeDetector.markForCheck();
         }
       })
       .on(`UPDATE_OBJECT_CHILDREN/identifier/${this.gameTableMask?.identifier}`, event => {
@@ -326,6 +339,10 @@ export class GameTableMaskComponent implements OnChanges, OnDestroy, AfterViewIn
         this.changeDetector.markForCheck();
       })
       .on('GM_MODE_CHANGED', event => {
+        this.changeDetector.markForCheck();
+      })
+      .on('IMAGE_FILE_CHANGED', () => {
+        this.scheduleCanvasRender();
         this.changeDetector.markForCheck();
       })
       .on('SYNCHRONIZE_FILE_LIST', event => {

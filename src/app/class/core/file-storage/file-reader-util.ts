@@ -1,5 +1,7 @@
-import * as WordArray from 'crypto-js/lib-typedarrays';
-import * as SHA256 from 'crypto-js/sha256';
+import WordArray from 'crypto-js/lib-typedarrays';
+import SHA256 from 'crypto-js/sha256';
+import { FileProcessingWorker } from './file-processing-worker';
+import { Logger } from '../system/util/logger';
 
 export namespace FileReaderUtil {
   export function readAsArrayBufferAsync(blob: Blob): Promise<ArrayBuffer> {
@@ -23,10 +25,19 @@ export namespace FileReaderUtil {
   export async function calcSHA256Async(arrayBuffer: ArrayBuffer): Promise<string>
   export async function calcSHA256Async(blob: Blob): Promise<string>
   export async function calcSHA256Async(arg: any): Promise<string> {
-    if (arg instanceof Blob) {
-      return _calcSHA256Async(arg);
-    } else {
-      return _calcSHA256(arg);
+    try {
+      return await FileProcessingWorker.sha256(arg);
+    } catch (e) {
+      if (!FileProcessingWorker.isAvailable()) {
+        // Worker非対応環境：フォールバックで処理（WARNは出さない）
+      } else {
+        Logger.warn('[FileReaderUtil] SHA-256 worker fallback', e);
+      }
+      if (arg instanceof Blob) {
+        return _calcSHA256Async(arg);
+      } else {
+        return _calcSHA256(arg);
+      }
     }
   }
 

@@ -28,6 +28,7 @@ export class GameCharacter extends TabletopObject {
   @SyncVar() visibility: string = 'public';
   @SyncVar() secretDetails: boolean = false;
   @SyncVar() nonTalkFlag: boolean = false;
+  @SyncVar() memo: string = '';
   @SyncVar() overViewWidth: number = 270;
   @SyncVar() overViewMaxHeight: number = 250;
 
@@ -105,6 +106,7 @@ export class GameCharacter extends TabletopObject {
   }
 
   private getIconNumElement(): DataElement {
+    if (!this.detailDataElement) return null;
     const iconNum = this.detailDataElement.getFirstElementByName('ICON');
     if (!iconNum || !iconNum.isNumberResource) return null;
     return iconNum;
@@ -116,13 +118,15 @@ export class GameCharacter extends TabletopObject {
     const iconNum = this.getIconNumElement();
     if (!iconNum) {
       const image: DataElement = this.imageDataElement.getFirstElementByName('imageIdentifier');
+      if (!image) return ImageFile.Empty;
       const file = ImageStorage.instance.get(<string>image.value);
       return file ? file : ImageFile.Empty;
     } else {
       let n = <number>iconNum.currentValue;
+      if (!Number.isFinite(n) || n < 0) n = 0;
       if (n > this.imageDataElement.children.length - 1) n = this.imageDataElement.children.length - 1;
       const image = this.imageDataElement.children[n];
-      const file = ImageStorage.instance.get(<string>image.value);
+      const file = image ? ImageStorage.instance.get(<string>image.value) : null;
       return file ? file : ImageFile.Empty;
     }
   }
@@ -142,6 +146,7 @@ export class GameCharacter extends TabletopObject {
   set size(value: number) { this.setCommonValue('size', value); }
   set initiative(value: number) { this.setCommonValue('initiative', value); }
   set initiativeFormula(value: string) { this.setCommonValue('initiativeFormula', value); }
+
 
   TestExec() {
     Logger.debug('TestExec');
@@ -937,7 +942,7 @@ export class GameCharacter extends TabletopObject {
       this.setStatusValue(name, nowOrMax, sum);
     }
     if ( type == 'currentValue'){
-      if ( sum >= data.value && limitMax){
+      if ( sum >= Number(data.value) && limitMax){
         maxRecoveryMess = '(最大)';
         sum = this.getStatusValue(name,'max');
       }

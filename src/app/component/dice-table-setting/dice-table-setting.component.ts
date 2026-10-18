@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, OnDestroy, OnInit , Input , Output , EventEmitter } from '@angular/core';
+import { AfterViewInit, Component, OnDestroy, OnInit, Input, Output, EventEmitter, ChangeDetectionStrategy } from '@angular/core';
 import { Logger } from '../../class/core/system/util/logger';
 
 import { ObjectSerializer } from '@udonarium/core/synchronize-object/object-serializer';
@@ -14,9 +14,11 @@ import { DiceTable } from '@udonarium/dice-table';
 import { DiceTablePalette } from '@udonarium/chat-palette';
 
 @Component({
-  selector: 'dice-table-setting',
-  templateUrl: './dice-table-setting.component.html',
-  styleUrls: ['./dice-table-setting.component.css']
+    selector: 'dice-table-setting',
+    templateUrl: './dice-table-setting.component.html',
+    styleUrls: ['./dice-table-setting.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class DiceTableSettingComponent implements OnInit, OnDestroy, AfterViewInit {
 

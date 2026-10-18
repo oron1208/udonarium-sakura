@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, NgZone, OnDestroy, ViewChild, ViewContainerRef } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, NgZone, OnDestroy, ViewChild, ViewContainerRef, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
 import { NgSelectConfig } from '@ng-select/ng-select';
 import * as lzbase62 from 'lzbase62';
 import { Logger } from './class/core/system/util/logger';
@@ -15,6 +15,7 @@ import { ImageSharingSystem } from '@udonarium/core/file-storage/image-sharing-s
 import { ImageStorage } from '@udonarium/core/file-storage/image-storage';
 import { ServerMediaStorage } from '@udonarium/core/file-storage/server-media-storage';
 import { ObjectFactory } from '@udonarium/core/synchronize-object/object-factory';
+import { InitialRoomSync } from '@udonarium/core/synchronize-object/initial-room-sync';
 import { ObjectSerializer } from '@udonarium/core/synchronize-object/object-serializer';
 import { ObjectStore } from '@udonarium/core/synchronize-object/object-store';
 import { ObjectSynchronizer } from '@udonarium/core/synchronize-object/object-synchronizer';
@@ -47,7 +48,9 @@ import { GameCharacterGeneratorComponent } from 'component/game-character-genera
 import { GameCharacterSheetComponent } from 'component/game-character-sheet/game-character-sheet.component';
 import { GameObjectInventoryComponent } from 'component/game-object-inventory/game-object-inventory.component';
 import { GameTableSettingComponent } from 'component/game-table-setting/game-table-setting.component';
+import { DictionaryPanelComponent } from 'component/dictionary-panel/dictionary-panel.component';
 import { JukeboxComponent } from 'component/jukebox/jukebox.component';
+import { AutoReconnect } from '@udonarium/core/system/network/auto-reconnect';
 import { DataImportMenuComponent } from 'component/data-import-menu/data-import-menu.component';
 import { OptionsPanelComponent } from 'component/options-panel/options-panel.component';
 import { InitiativePanelComponent } from 'component/initiative-panel/initiative-panel.component';
@@ -71,15 +74,26 @@ import { VoteWindowComponent } from 'component/vote-window/vote-window.component
 import { AlarmWindowComponent } from 'component/alarm-window/alarm-window.component';
 import { ChatMessageFixComponent } from 'component/chat-message-fix/chat-message-fix.component';
 
+interface BundleLoadingState {
+  operationId: string;
+  source: 'room' | 'media';
+  phase: string;
+  done: number;
+  total: number;
+}
 
 @Component({
-  selector: 'app-root',
-  templateUrl: './app.component.html',
-  styleUrls: ['./app.component.css']
+    selector: 'app-root',
+    templateUrl: './app.component.html',
+    styleUrls: ['./app.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class AppComponent implements AfterViewInit, OnDestroy {
 
-  @ViewChild('modalLayer', { read: ViewContainerRef, static: true }) modalLayerViewContainerRef!: ViewContainerRef;
+  @ViewChild('modalLayer', { read: ViewContainerRef, static: false }) modalLayerViewContainerRef!: ViewContainerRef;
+  /** ?paletteWindow=1 付きで開かれたチャパレ専用サブウィンドウ。部屋への接続・パネル・モーダルを一切初期化しない。 */
+  readonly isPopupWindow: boolean = new URLSearchParams(window.location.search).get('popup') === '1';
 
   get reloadCheck(): ReloadCheck { return ObjectStore.instance.get<ReloadCheck>('ReloadCheck'); }
   networkService = Network;
@@ -102,6 +116,21 @@ export class AppComponent implements AfterViewInit, OnDestroy {
   isAdvancedRoom = false;
   developerAnnouncementText = '';
   developerAnnouncementLevel = 'warning';
+
+  // 初期ルーム同期・メディア一括ダウンロードの共通表示
+  isBundleLoading = false;
+  bundleTotal = 0;
+  bundleDone = 0;
+  bundleLoadingText = '部屋データを準備しています';
+  bundleLoadingDetail = '同期処理を開始しています。';
+  bundleLoadingProgressText = 'しばらくお待ちください';
+  bundleProgressPercent: number | null = null;
+  bundleProgressAriaValue: number | null = null;
+  private initialRoomLoadingState: BundleLoadingState | null = null;
+  private mediaBundleLoadingStates: Map<string, BundleLoadingState> = new Map();
+  private mediaBundleOperationSequence = 0;
+  private previousBundleFocusedElement: HTMLElement | null = null;
+  private bundleModalBackground: Array<{ element: HTMLElement, inert: boolean, ariaHidden: string | null }> = [];
 
   get isGmMode(): boolean { return this.gmModeService.isGm; }
 
@@ -167,8 +196,11 @@ export class AppComponent implements AfterViewInit, OnDestroy {
     public gmModeService: GmModeService,
     private ngSelectConfig: NgSelectConfig,
     private ngZone: NgZone,
-    private audioLibraryService: AudioLibraryService
+    private audioLibraryService: AudioLibraryService,
+    private hostElement: ElementRef<HTMLElement>,
+    private changeDetector: ChangeDetectorRef
   ) {
+    AutoReconnect.instance.initialize();
 
     // AudioLibraryServiceをJukeboxに注入
     Jukebox.setAudioLibraryService(this.audioLibraryService);
@@ -188,6 +220,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
       ObjectSerializer.instance;
       ObjectStore.instance;
       ObjectSynchronizer.instance.initialize();
+      InitialRoomSync.instance.initialize();
     });
     this.appConfigService.initialize();
     this.pointerDeviceService.initialize();
@@ -300,6 +333,51 @@ export class AppComponent implements AfterViewInit, OnDestroy {
           this.handleDeveloperControlMessage(data);
         });
       })
+      .on('INITIAL_ROOM_MEDIA_CATALOG', 1000, event => {
+        if (!event.isSendFromSelf) return;
+        const data = event.data as any;
+        if (!data || data.handled) return;
+        data.handled = true;
+        const useInitialBundle = (() => {
+          try { return localStorage.getItem('udonarium.initialMediaBundle.enabled.v1') === '1'; }
+          catch (_) { return false; }
+        })();
+        if (useInitialBundle) {
+          this.loadInitialRoomMediaBundle(data);
+        } else if (typeof data.fallback === 'function') {
+          data.fallback();
+        }
+      })
+      .on('INITIAL_ROOM_SYNC_PROGRESS', event => {
+        if (!event.isSendFromSelf) return;
+        this.ngZone.run(() => this.updateInitialRoomLoadingState(event.data));
+      })
+      .on('MEDIA_BUNDLE_PROGRESS', event => {
+        if (!event.isSendFromSelf) return;
+        this.ngZone.run(() => {
+          const data = event.data || {};
+          const operationId = typeof data.operationId === 'string' && data.operationId.length <= 128
+            ? data.operationId
+            : 'legacy-media-bundle';
+          if (data.status === 'downloading' || data.status === 'extracting') {
+            const next: BundleLoadingState = {
+              operationId,
+              source: 'media',
+              phase: data.status,
+              total: this.toProgressNumber(data.total),
+              done: this.toProgressNumber(data.done)
+            };
+            const previous = this.mediaBundleLoadingStates.get(operationId);
+            if (!this.shouldUpdateMediaProgress(previous, next)) return;
+            // Reinsert so the operation with the newest visible progress wins.
+            this.mediaBundleLoadingStates.delete(operationId);
+            this.mediaBundleLoadingStates.set(operationId, next);
+          } else {
+            this.mediaBundleLoadingStates.delete(operationId);
+          }
+          this.refreshBundleLoadingOverlay();
+        });
+      })
       .on('UPDATE_GAME_OBJECT', event => { this.syncAdvancedRoomUiClass(); this.lazyNgZoneUpdate(event.isSendFromSelf); })
       .on('DELETE_GAME_OBJECT', event => { this.syncAdvancedRoomUiClass(); this.lazyNgZoneUpdate(event.isSendFromSelf); })
       .on('SELECT_GAME_TABLE', event => { this.syncAdvancedRoomUiClass(); this.closePanelsIfNotAdvanced(); })
@@ -346,8 +424,10 @@ export class AppComponent implements AfterViewInit, OnDestroy {
         }
       })
       .on('SYNCHRONIZE_FILE_LIST', event => { if (event.isSendFromSelf) this.lazyNgZoneUpdate(false); })
+      .on('IMAGE_FILE_CHANGED', () => this.lazyNgZoneUpdate(false))
       .on<AppConfig>('LOAD_CONFIG', event => {
         Logger.debug('LOAD_CONFIG !!!');
+        if (this.isPopupWindow) return; // サブウィンドウは自分では部屋に接続しない（メイン画面とBridgeで繋ぐ）
         Network.configure(event.data);
         Network.setApiKey(event.data.webrtc.key);
         Network.setSignalingUrl(event.data.webrtc.signalingUrl || '');
@@ -387,7 +467,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
 
           if (!reconnectErrorTypes.includes(errorType)) return;
           await this.modalService.open(TextViewComponent, { title: 'ネットワークエラー', text: 'このウィンドウを閉じると再接続を試みます。' });
-          Network.open();
+          if (!this.isPopupWindow) Network.open();
         });
       })
       .on('SERVER_MEDIA_MISSING', event => {
@@ -402,10 +482,241 @@ export class AppComponent implements AfterViewInit, OnDestroy {
       })
       .on('DISCONNECT_PEER', event => {
         this.lazyNgZoneUpdate(event.isSendFromSelf);
+      })
+      .on('PEER_UNSTABLE', event => {
+        if (event.isSendFromSelf) return;
+        const peerId = event.data.peerId;
+        const health = event.data.health;
+        const cursor = PeerCursor.findByPeerId(peerId);
+        const name = cursor && cursor.name ? cursor.name : peerId.slice(0, 8);
+        const chatTabList = ObjectStore.instance.get<ChatTabList>('ChatTabList');
+        const sysTab = chatTabList ? chatTabList.systemMessageTab : null;
+        if (sysTab) {
+          this.chatMessageService.sendSystemMessage(sysTab, `${name}さんの接続が不安定です (health: ${health.toFixed(2)})`, '#B8860B');
+        }
+        this.lazyNgZoneUpdate(false);
       });
   }
 
+  private updateInitialRoomLoadingState(data: any) {
+    const phase = typeof data?.phase === 'string' ? data.phase : '';
+    const syncId = typeof data?.syncId === 'string' && data.syncId.length <= 128 ? data.syncId : '';
+    if (phase === 'idle') {
+      this.initialRoomLoadingState = null;
+    } else if (phase === 'complete' || phase === 'failed' || phase === 'fallback') {
+      if (!this.initialRoomLoadingState || !syncId || this.initialRoomLoadingState.operationId === syncId) {
+        this.initialRoomLoadingState = null;
+      }
+    } else if (phase === 'preparing' || phase === 'downloading' || phase === 'extracting' || phase === 'applying') {
+      this.initialRoomLoadingState = {
+        operationId: syncId || 'initial-room-sync',
+        source: 'room',
+        phase,
+        total: this.toProgressNumber(data.total),
+        done: this.toProgressNumber(data.done)
+      };
+    } else {
+      return;
+    }
+    this.refreshBundleLoadingOverlay();
+  }
+
+  private refreshBundleLoadingOverlay() {
+    // Media starts immediately after the room objects are applied. Keeping the
+    // states separate prevents the room-complete event from hiding media work.
+    const mediaStates = Array.from(this.mediaBundleLoadingStates.values());
+    const state = mediaStates[mediaStates.length - 1] || this.initialRoomLoadingState;
+    const wasLoading = this.isBundleLoading;
+    this.isBundleLoading = state != null;
+    if (wasLoading !== this.isBundleLoading) this.setBundleModalActive(this.isBundleLoading);
+    if (!state) {
+      this.bundleTotal = 0;
+      this.bundleDone = 0;
+      this.bundleProgressPercent = null;
+      this.bundleProgressAriaValue = null;
+      return;
+    }
+
+    this.bundleTotal = state.total;
+    this.bundleDone = 0 < state.total ? Math.min(state.done, state.total) : state.done;
+    this.bundleProgressPercent = 0 < state.total
+      ? Math.max(0, Math.min(100, this.bundleDone / state.total * 100))
+      : null;
+    this.bundleProgressAriaValue = this.bundleProgressPercent == null
+      ? null
+      : Math.floor(this.bundleProgressPercent);
+
+    if (state.source === 'media') {
+      if (state.phase === 'extracting') {
+        this.bundleLoadingText = '画像・音声を展開中';
+        this.bundleLoadingDetail = '受信したメディアZIPを順番に展開しています。';
+      } else {
+        this.bundleLoadingText = '画像・音声をダウンロード中';
+        this.bundleLoadingDetail = '部屋で使用するメディアをまとめて取得しています。';
+      }
+    } else if (state.phase === 'preparing') {
+      this.bundleLoadingText = '部屋データを準備中';
+      this.bundleLoadingDetail = '同期元の端末でZIPファイルを作成しています。';
+    } else if (state.phase === 'downloading') {
+      this.bundleLoadingText = '部屋データをダウンロード中';
+      this.bundleLoadingDetail = '同期用ZIPファイルを受信しています。';
+    } else if (state.phase === 'extracting') {
+      this.bundleLoadingText = '部屋データを展開中';
+      this.bundleLoadingDetail = '受信したZIPファイルを確認して展開しています。';
+    } else {
+      this.bundleLoadingText = '部屋データを反映中';
+      this.bundleLoadingDetail = 'キャラクターやチャットなどを部屋に反映しています。';
+    }
+
+    if (this.bundleProgressPercent == null) {
+      this.bundleLoadingProgressText = state.phase === 'preparing'
+        ? 'ZIPファイルを準備しています'
+        : state.phase === 'extracting'
+          ? 'ZIPファイルを確認しています'
+          : '処理を開始しています';
+    } else if (state.source === 'media' || state.phase === 'applying') {
+      this.bundleLoadingProgressText = `${this.bundleDone.toLocaleString()} / ${this.bundleTotal.toLocaleString()} 件`;
+    } else {
+      this.bundleLoadingProgressText = `${Math.floor(this.bundleProgressPercent)}%`;
+    }
+  }
+
+  private toProgressNumber(value: any): number {
+    return Number.isSafeInteger(value) && 0 <= value ? value : 0;
+  }
+
+  private shouldUpdateMediaProgress(previous: BundleLoadingState | undefined, next: BundleLoadingState): boolean {
+    if (!previous || previous.phase !== next.phase || previous.total !== next.total) return true;
+    if (0 < next.total && next.total <= next.done) return true;
+    if (next.total < 1) return false;
+    const previousPercent = Math.floor(Math.min(previous.done, previous.total) / previous.total * 100);
+    const nextPercent = Math.floor(Math.min(next.done, next.total) / next.total * 100);
+    return previousPercent !== nextPercent;
+  }
+
+  private setBundleModalActive(active: boolean) {
+    const host = this.hostElement.nativeElement;
+    if (active) {
+      const focused = document.activeElement;
+      this.previousBundleFocusedElement = focused instanceof HTMLElement && focused !== document.body ? focused : null;
+    }
+
+    setTimeout(() => {
+      if (active) {
+        this.restoreBundleModalBackground();
+        this.bundleModalBackground = Array.from(host.children)
+          .filter(element => !element.classList.contains('bundle-loading-overlay'))
+          .map(element => ({
+            element: element as HTMLElement,
+            inert: element.hasAttribute('inert'),
+            ariaHidden: element.getAttribute('aria-hidden')
+          }));
+        for (const item of this.bundleModalBackground) {
+          item.element.setAttribute('inert', '');
+          item.element.setAttribute('aria-hidden', 'true');
+        }
+        const card = host.querySelector('.bundle-loading-card') as HTMLElement;
+        if (card) card.focus({ preventScroll: true });
+      } else {
+        this.restoreBundleModalBackground();
+        const previous = this.previousBundleFocusedElement;
+        this.previousBundleFocusedElement = null;
+        if (previous && previous.isConnected) previous.focus({ preventScroll: true });
+      }
+    }, 0);
+  }
+
+  private restoreBundleModalBackground() {
+    for (const item of this.bundleModalBackground) {
+      if (item.inert) item.element.setAttribute('inert', '');
+      else item.element.removeAttribute('inert');
+      if (item.ariaHidden == null) item.element.removeAttribute('aria-hidden');
+      else item.element.setAttribute('aria-hidden', item.ariaHidden);
+    }
+    this.bundleModalBackground = [];
+  }
+
+  private async loadInitialRoomMediaBundle(data: any): Promise<void> {
+    const images = Array.isArray(data.images)
+      ? data.images.map(item => item && item.identifier).filter(identifier => typeof identifier === 'string')
+      : [];
+    const audios = Array.isArray(data.audios)
+      ? data.audios.map(item => item && item.identifier).filter(identifier => typeof identifier === 'string')
+      : [];
+    const fallback = typeof data.fallback === 'function' ? data.fallback : () => { };
+    const operationId = `initial-room-media-${Date.now().toString(36)}-${++this.mediaBundleOperationSequence}`;
+
+    EventSystem.trigger('MEDIA_BUNDLE_PROGRESS', {
+      operationId,
+      status: 'downloading',
+      total: images.length + audios.length,
+      done: 0,
+    });
+    const missingEntries: any[] = [];
+    const failedEntries: any[] = [];
+    let loadedTotal = 0;
+    try {
+      // 1バッチのZIPを数MB〜十数MB程度に保つ。大きいZIPの一括展開は
+      // iOS Safariのタブメモリ上限を超えてタブごと落ちる（170MB一括で再現）。
+      const { MediaLoadPriority } = await import('@udonarium/core/file-storage/media-load-priority');
+      const orderedImages = MediaLoadPriority.sortByScore(images.map(identifier => ({ identifier })), MediaLoadPriority.getImageScoreMap()).map(item => item.identifier);
+      const orderedAudios = MediaLoadPriority.sortByScore(audios.map(identifier => ({ identifier })), MediaLoadPriority.getAudioScoreMap()).map(item => item.identifier);
+
+      const BATCH_ITEMS = 24;
+      const batches: Array<{ images: string[]; audios: string[] }> = [];
+      for (let i = 0; i < orderedImages.length; i += BATCH_ITEMS) batches.push({ images: orderedImages.slice(i, i + BATCH_ITEMS), audios: [] });
+      for (let i = 0; i < orderedAudios.length; i += BATCH_ITEMS) batches.push({ images: [], audios: orderedAudios.slice(i, i + BATCH_ITEMS) });
+
+      const total = orderedImages.length + orderedAudios.length;
+      let done = 0;
+      for (const batch of batches) {
+        const batchTotal = batch.images.length + batch.audios.length;
+        try {
+          const result = await ServerMediaStorage.fetchBundle(batch.images, batch.audios, progress => {
+            EventSystem.trigger('MEDIA_BUNDLE_PROGRESS', {
+              operationId,
+              status: 'extracting',
+              total,
+              done: done + progress.done,
+            });
+          });
+          loadedTotal += result.loaded;
+          missingEntries.push(...result.missing);
+          failedEntries.push(...result.failed);
+        } catch (error) {
+          Logger.warn('[media-bundle] batch failed; continuing with remaining batches', error);
+        }
+        done += batchTotal;
+        EventSystem.trigger('MEDIA_BUNDLE_PROGRESS', { operationId, status: 'extracting', total, done });
+        // バッチ間でUIに譲る（メモリ解放とペイントの機会）
+        await new Promise<void>(resolve => setTimeout(resolve, 50));
+      }
+
+      if (missingEntries.length || failedEntries.length) {
+        Logger.warn(`[media-bundle] loaded=${loadedTotal} missing=${missingEntries.length} failed=${failedEntries.length}`);
+        // サーバーに存在しない/破損画像のplaceholderを削除して、永久ぐるぐるを防止
+        const { ImageStorage } = await import('@udonarium/core/file-storage/image-storage');
+        const { AudioStorage } = await import('@udonarium/core/file-storage/audio-storage');
+        for (const entry of [...missingEntries, ...failedEntries]) {
+          if (entry.kind === 'image') {
+            ImageStorage.instance.delete(entry.hash);
+          } else if (entry.kind === 'audio') {
+            AudioStorage.instance.delete(entry.hash);
+          }
+        }
+      }
+    } catch (error) {
+      // Old servers and interrupted ZIP transfers immediately return to the
+      // existing individual HTTP/P2P path instead of blocking room entry.
+      Logger.warn('[media-bundle] bulk download failed; using legacy fallback', error);
+    } finally {
+      fallback();
+      EventSystem.trigger('MEDIA_BUNDLE_PROGRESS', { operationId, status: 'done', total: 0, done: 0 });
+    }
+  }
+
   ngAfterViewInit() {
+    if (this.isPopupWindow) return; // サブウィンドウはパネル・モーダル・開発者ブリッジを初期化しない
     PanelService.defaultParentViewContainerRef = ModalService.defaultParentViewContainerRef = ContextMenuService.defaultParentViewContainerRef = this.modalLayerViewContainerRef;
     this.syncAdvancedRoomUiClass();
     setTimeout(() => {
@@ -420,7 +731,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
     const text = [
       '法令または公序良俗に違反する行為を禁止しています。',
       '詳しくは利用規約をご一読ください。',
-      'https://udonarium-sakura.example/docs/terms.html',
+      'https://udonarium-lycoris.ddns.net/docs/terms.html',
       '',
       'ご了承いただけたらOKを押してください。'
     ].join('\n');
@@ -507,7 +818,9 @@ export class AppComponent implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy() {
+    InitialRoomSync.instance.destroy();
     EventSystem.unregister(this);
+    this.restoreBundleModalBackground();
     document.body.classList.remove('udonarium-advanced-room');
     if (this.developerPollTimer != null) clearInterval(this.developerPollTimer);
     if (this.developerHeartbeatTimer != null) clearInterval(this.developerHeartbeatTimer);
@@ -571,7 +884,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
           const chatTabList = ObjectStore.instance.get<ChatTabList>('ChatTabList');
           const sysTab = chatTabList ? chatTabList.systemMessageTab : null;
           this.chatMessageService.sendSystemMessage(sysTab, this.developerAnnouncementText, '#b71c1c');
-          Network.open();
+          if (!this.isPopupWindow) Network.open();
         }
         return;
       }
@@ -769,7 +1082,11 @@ export class AppComponent implements AfterViewInit, OnDestroy {
         break;
       case 'GameTableSettingComponent':
         component = GameTableSettingComponent;
-        option = { width: 1200, height: 550, left: 10, top: 20 };
+        option = { width: 1000, height: 550, left: 10, top: 20 };
+        break;
+      case 'DictionaryComponent':
+        component = DictionaryPanelComponent;
+        option = { width: 780, height: 620, left: 120 };
         break;
       case 'FileStorageComponent':
         component = FileStorageComponent;
@@ -807,7 +1124,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
       option.top = (this.openPanelCount % 10 + 1) * 20;
       option.left = 100 + (this.openPanelCount % 20 + 1) * 5;
       if (componentName === 'GameTableSettingComponent') {
-        option.width = Math.max(320, Math.min(1200, window.innerWidth - 20));
+        option.width = Math.max(320, Math.min(1000, window.innerWidth - 20));
         option.height = Math.max(320, Math.min(550, window.innerHeight - 40));
         option.left = 10;
         option.top = 20;
@@ -1103,6 +1420,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
     const inRoom = ts != null && ts.viewTableIdentifier.length > 0;
     const viewTable = inRoom ? ts.viewTable : null;
     const enabled = !!viewTable && viewTable.roomMode === 'advanced';
+    if (this.isAdvancedRoom !== enabled) this.changeDetector.markForCheck();
     this.isAdvancedRoom = enabled;
     document.body.classList.toggle('udonarium-advanced-room', enabled);
   }

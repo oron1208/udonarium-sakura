@@ -1,4 +1,4 @@
-import { Component, ElementRef, EventEmitter, Input, NgZone, OnDestroy, OnInit, Output, ViewChild } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Input, NgZone, OnDestroy, OnInit, Output, ViewChild, ChangeDetectionStrategy } from '@angular/core';
 import GameSystemClass from 'bcdice/lib/game_system';
 import { ChatMessage } from '@udonarium/chat-message';
 import { ImageFile } from '@udonarium/core/file-storage/image-file';
@@ -22,9 +22,11 @@ import { ImageStorage } from '@udonarium/core/file-storage/image-storage';
 import { Config } from '@udonarium/config';
 
 @Component({
-  selector: 'chat-message-fix',
-  templateUrl: './chat-message-fix.component.html',
-  styleUrls: ['./chat-message-fix.component.css']
+    selector: 'chat-message-fix',
+    templateUrl: './chat-message-fix.component.html',
+    styleUrls: ['./chat-message-fix.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class ChatMessageFixComponent implements OnInit, OnDestroy {
   @ViewChild('textArea', { static: true }) textAreaElementRef!: ElementRef;

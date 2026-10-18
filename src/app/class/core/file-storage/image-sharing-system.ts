@@ -1,10 +1,13 @@
 import { EventSystem, Network } from '../system';
 import { UUID } from '../system/util/uuid';
 import { BufferSharingTask } from './buffer-sharing-task';
+import { BlobIntegrity } from './blob-integrity';
 import { FileReaderUtil } from './file-reader-util';
 import { ImageContext, ImageFile, ImageState } from './image-file';
 import { CatalogItem, ImageStorage } from './image-storage';
 import { MimeType } from './mime-type';
+import { MediaLoadPriority, MediaPriority } from './media-load-priority';
+import { MediaCache } from './media-cache';
 import { ServerMediaStorage } from './server-media-storage';
 import { Logger } from '../system/util/logger';
 
@@ -17,8 +20,12 @@ export class ImageSharingSystem {
 
   private sendTaskMap: Map<string, BufferSharingTask<ImageContext[]>> = new Map();
   private receiveTaskMap: Map<string, BufferSharingTask<ImageContext[]>> = new Map();
-  private maxSendTask: number = 2;
-  private maxReceiveTask: number = 4;
+  private maxSendTask: number = 6;
+  private maxReceiveTask: number = 12;
+  /** 直近に補充announceを出したidentifier（スパム防止） */
+  private replenishAnnouncedAt: Map<string, number> = new Map();
+  /** 補充待ち再取得の重複実行防止 */
+  private replenishRetrying: Set<string> = new Set();
 
   private constructor() {
     Logger.debug('FileSharingSystem ready...');
@@ -29,7 +36,16 @@ export class ImageSharingSystem {
       .on('CONNECT_PEER', 1, event => {
         if (!event.isSendFromSelf) return;
         Logger.debug('CONNECT_PEER ImageStorageService !!!', event.data.peerId);
-        ImageStorage.instance.synchronize();
+        // InitialRoomSync sends one room ZIP first.  Older peers are handled by
+        // the explicit INITIAL_ROOM_SYNC_FALLBACK path below.
+      })
+      .on('INITIAL_ROOM_SYNC_FALLBACK', event => {
+        if (!event.isSendFromSelf || !event.data?.peerId) return;
+        ImageStorage.instance.synchronize(event.data.peerId);
+      })
+      .on('INITIAL_ROOM_MEDIA_CATALOG_FALLBACK', event => {
+        if (!event.isSendFromSelf || !Array.isArray(event.data?.images)) return;
+        this.applyInitialCatalog(event.data.images, event.data.sourcePeerId);
       })
       .on('XML_LOADED', event => {
         convertUrlImage(event.data.xmlElement);
@@ -41,21 +57,85 @@ export class ImageSharingSystem {
         let otherCatalog: CatalogItem[] = event.data;
         let request: CatalogItem[] = [];
 
+        // サーバーfetchを並列バッチで実行
+        // FirefoxはHTTP/2接続プール上限が厳しいため並列数を抑える
+        const isFirefox = typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent);
+        const BATCH_SIZE = isFirefox ? 6 : 16;
+        const LOW_PRIORITY_BATCH = isFirefox ? 3 : 6;
+        const needFetch: CatalogItem[] = [];
+
+        const hashPattern = /^[a-f0-9]{64}$/i;
         for (let item of otherCatalog) {
-          let image: ImageFile = ImageStorage.instance.get(item.identifier);
+          let image: ImageFile = ImageStorage.instance.get(item.identifier, false);
           if (image === null) {
-            image = ImageFile.createEmpty(item.identifier);
-            ImageStorage.instance.add(image);
+            if (hashPattern.test(item.identifier)) {
+              // SHA-256 hash: create empty placeholder, fetch from server later
+              image = ImageFile.createEmpty(item.identifier);
+              ImageStorage.instance.add(image);
+            } else {
+              // URL-based identifier (e.g. ./assets/images/trump/x02.gif):
+              // add as a URL image so the browser loads it from the app assets
+              image = ImageStorage.instance.add(item.identifier);
+            }
           }
           if (image.state < ImageState.COMPLETE && !this.receiveTaskMap.has(item.identifier)) {
-            let result = await ServerMediaStorage.fetchImage(item.identifier);
+            needFetch.push(item);
+          }
+        }
+
+        // 見える範囲（卓背景・卓上コマ・VN立ち絵など）を先に取得し、
+        // 未参照/控え素材（スコア0）は描画が落ち着いた後に後景で取得する。
+        const priorityScores = MediaLoadPriority.getImageScoreMap();
+        const prioritizedFetch = MediaLoadPriority.sortByScore(needFetch, priorityScores);
+        const visibleFetch = prioritizedFetch.filter(item => MediaLoadPriority.scoreOf(priorityScores, item.identifier) > 0);
+        const backgroundFetch = prioritizedFetch.filter(item => MediaLoadPriority.scoreOf(priorityScores, item.identifier) <= 0);
+
+        const fetchBatch = async (batch: CatalogItem[], priority: MediaPriority): Promise<void> => {
+          const results = await Promise.all(
+            batch.map(async item => {
+              try {
+                const result = await MediaCache.fetchImageWithCache(item.identifier, priority);
+                return { item, result };
+              } catch (e) {
+                return { item, result: { status: 'unreachable' as const } };
+              }
+            })
+          );
+          for (const { item, result } of results) {
             if (result.status === 'ok') {
               ImageStorage.instance.add(result.file);
+            } else if (result.status === 'missing') {
+              // Keep the shared placeholder: tabletop objects may hold this
+              // instance, and a ZIP import may have filled it during the fetch.
+              // 所持者がいればサーバーへ再アップロードしてもらい自己修復する
+              this.requestReplenish(item.identifier);
+              Logger.debug(`[ImageSharingSystem] awaiting missing image recovery: ${item.identifier}`);
             } else {
-              // missing(本当に無い) / unreachable(サーバー障害) のどちらも P2P フォールバックで救済する。
-              // in-flight の場合は Promise 共有で待機済みなので、ここに到達するのは確定失敗のみ。
-              request.push({ identifier: item.identifier, state: image.state });
+              request.push(item);
             }
+          }
+        };
+
+        for (let i = 0; i < visibleFetch.length;) {
+          const batch = visibleFetch.slice(i, i + BATCH_SIZE);
+          i += batch.length;
+          await fetchBatch(batch, 'high');
+        }
+
+        // 未参照素材は表示が揃ってから、アイドル時・低優先度で少しずつ取得する
+        if (backgroundFetch.length) {
+          const start = () => { void (async () => {
+            for (let i = 0; i < backgroundFetch.length;) {
+              const batch = backgroundFetch.slice(i, i + LOW_PRIORITY_BATCH);
+              i += batch.length;
+              await fetchBatch(batch, 'low');
+              await new Promise(resolve => setTimeout(resolve, 120));
+            }
+          })(); };
+          if (typeof (window as any).requestIdleCallback === 'function') {
+            (window as any).requestIdleCallback(start, { timeout: 4000 });
+          } else {
+            setTimeout(start, 2000);
           }
         }
 
@@ -76,7 +156,7 @@ export class ImageSharingSystem {
         let randomRequest: CatalogItem[] = [];
 
         for (let item of request) {
-          let image: ImageFile = ImageStorage.instance.get(item.identifier);
+          let image: ImageFile = ImageStorage.instance.get(item.identifier, false);
           if (image && item.state < image.state)
             randomRequest.push({ identifier: item.identifier, state: item.state });
         }
@@ -100,19 +180,48 @@ export class ImageSharingSystem {
           Logger.debug('REQUEST_FILE_RESOURE ImageStorageService あぶれた...' + event.data.receiver, randomRequest.length);
         }
       })
+      .on('REQUEST_MEDIA_REPLENISH', event => {
+        if (event.isSendFromSelf) return;
+        const identifier: string = event.data?.identifier;
+        if (!identifier || event.data?.kind === 'audio' || !/^[a-f0-9]{64}$/i.test(identifier)) return;
+        const image: ImageFile = ImageStorage.instance.get(identifier, false);
+        // blob を完全所持しているピアだけが補充候補になる
+        if (!image || image.state < ImageState.COMPLETE || image.state >= ImageState.URL || !image.blob) return;
+        const blob: Blob = image.blob;
+        const name: string = image.name;
+        const waitMs = Math.floor(Math.random() * 1500);
+        Logger.debug(`[ImageSharingSystem] replenish candidate ${identifier.slice(0, 12)} in ${waitMs}ms`);
+        setTimeout(() => {
+          void (async () => {
+            // 補充前検証: 壊れたblobのアップロードを拒否（サーバー汚染と破損の無限拡散を防ぐ）
+            if (!(await BlobIntegrity.isIntact(identifier, blob))) {
+              Logger.warn(`[ImageSharingSystem] refuse to replenish corrupt blob ${identifier.slice(0, 12)} (hash mismatch)`);
+              return;
+            }
+            void ServerMediaStorage.replenishUploadImage(identifier, blob, name);
+          })();
+        }, waitMs);
+      })
       .on('UPDATE_FILE_RESOURE', 1000, event => {
         let updateImages: ImageContext[] = event.data.updateImages;
         Logger.debug('UPDATE_FILE_RESOURE ImageStorageService ' + event.sendFrom + ' -> ', updateImages);
-        for (let context of updateImages) {
-          if (context.blob) context.blob = new Blob([context.blob], { type: context.type });
-          if (context.thumbnail.blob) context.thumbnail.blob = new Blob([context.thumbnail.blob], { type: context.thumbnail.type });
-          ImageStorage.instance.add(context);
-        }
+        void (async () => {
+          for (let context of updateImages) {
+            // 受信検証: identifierはblob内容のSHA-256。壊れたblobはメモリにも入れない（broken表示と再拡散の遮断）
+            if (context.blob && /^[a-f0-9]{64}$/i.test(context.identifier || '') && !(await BlobIntegrity.isIntact(context.identifier, context.blob))) {
+              Logger.warn(`[ImageSharingSystem] discard corrupt received image ${context.identifier.slice(0, 12)} (hash mismatch)`);
+              continue;
+            }
+            if (context.blob) context.blob = new Blob([context.blob], { type: context.type });
+            if (context.thumbnail.blob) context.thumbnail.blob = new Blob([context.thumbnail.blob], { type: context.thumbnail.type });
+            ImageStorage.instance.add(context);
+          }
+        })();
       })
       .on('START_FILE_TRANSMISSION', event => {
         Logger.debug('START_FILE_TRANSMISSION ' + event.data.taskIdentifier);
         let identifier = event.data.taskIdentifier;
-        let image: ImageFile = ImageStorage.instance.get(identifier);
+        let image: ImageFile = ImageStorage.instance.get(identifier, false);
         if (this.receiveTaskMap.has(identifier) || (image && ImageState.COMPLETE <= image.state)) {
           Logger.warn('CANCEL_TASK_ ' + identifier);
           EventSystem.call('CANCEL_TASK_' + identifier, null, event.sendFrom);
@@ -120,6 +229,20 @@ export class ImageSharingSystem {
           this.startReceiveTask(identifier);
         }
       });
+  }
+
+  /**
+   * Reuses the normal per-file HTTP/P2P path for a catalog embedded in the
+   * initial room ZIP.  The event is local but carries the selected source peer
+   * so missing server media can still fall back to that peer.
+   */
+  applyInitialCatalog(catalog: CatalogItem[], sourcePeerId: string) {
+    if (!Array.isArray(catalog) || !sourcePeerId) return;
+    EventSystem.trigger({
+      eventName: 'SYNCHRONIZE_FILE_LIST',
+      data: catalog,
+      sendFrom: sourcePeerId
+    });
   }
 
   private destroy() {
@@ -179,6 +302,56 @@ export class ImageSharingSystem {
     Logger.debug('stopReceiveTask => ', this.receiveTaskMap.size);
   }
 
+  /** サーバー404を観測した画像の補充を部屋に依頼し、自分も後刻再取得を試みる */
+  private requestReplenish(identifier: string) {
+    if (!/^[a-f0-9]{64}$/i.test(identifier)) return;
+    const now = Date.now();
+    const last = this.replenishAnnouncedAt.get(identifier) ?? 0;
+    if (now - last < 30000) return;
+    this.replenishAnnouncedAt.set(identifier, now);
+    Logger.debug(`[ImageSharingSystem] replenish announce: ${identifier.slice(0, 12)}`);
+    // 自分がblob完全所持なら自分で再PUTする（1人部屋では他ピアに依頼できないため自己修復）
+    const self = ImageStorage.instance.get(identifier, false);
+    if (self && ImageState.COMPLETE <= self.state && self.state < ImageState.URL && self.blob) {
+      const blob = self.blob;
+      const name = self.name;
+      const waitMs = Math.floor(Math.random() * 1500);
+      setTimeout(() => { void ServerMediaStorage.replenishUploadImage(identifier, blob, name); }, waitMs);
+    }
+    EventSystem.call('REQUEST_MEDIA_REPLENISH', { identifier, requester: Network.peerId });
+    this.scheduleReplenishRetry(identifier);
+  }
+
+  /** 補充を待って再取得（2.5/5/8秒後の最大3回）。取得できたらImageStorageへ戻す */
+  private scheduleReplenishRetry(identifier: string) {
+    if (this.replenishRetrying.has(identifier)) return;
+    this.replenishRetrying.add(identifier);
+    void (async () => {
+      try {
+        const attempts = [2500, 5000, 8000];
+        for (const delayMs of attempts) {
+          await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+          const local: ImageFile = ImageStorage.instance.get(identifier, false);
+          if (local && ImageState.COMPLETE <= local.state && local.state < ImageState.URL) return;
+          try {
+            const result = await MediaCache.fetchImageWithCache(identifier);
+            if (result.status === 'ok') {
+              ImageStorage.instance.add(result.file);
+              Logger.debug(`[ImageSharingSystem] replenished: ${identifier.slice(0, 12)}`);
+              EventSystem.trigger('MEDIA_REPLENISHED', { identifier });
+              return;
+            }
+            if (result.status === 'unreachable') return;
+          } catch {
+            return;
+          }
+        }
+      } finally {
+        this.replenishRetrying.delete(identifier);
+      }
+    })();
+  }
+
   private request(request: CatalogItem[], peerId: string) {
     Logger.debug('requestFile() ' + peerId);
     let peerIds = Network.peerIds;
@@ -204,7 +377,7 @@ export class ImageSharingSystem {
 
     for (let i = 0; i < catalog.length; i++) {
       let item: { identifier: string, state: number } = catalog[i];
-      let image: ImageFile = ImageStorage.instance.get(item.identifier);
+      let image: ImageFile = ImageStorage.instance.get(item.identifier, false);
 
       let context: ImageContext = {
         identifier: image.identifier,

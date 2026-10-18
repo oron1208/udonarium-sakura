@@ -15,10 +15,11 @@ import { PointerDeviceService } from 'service/pointer-device.service';
 import { Logger } from '../../class/core/system/util/logger';
 
 @Component({
-  selector: 'text-note',
-  templateUrl: './text-note.component.html',
-  styleUrls: ['./text-note.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'text-note',
+    templateUrl: './text-note.component.html',
+    styleUrls: ['./text-note.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class TextNoteComponent implements OnInit, OnDestroy, AfterViewInit {
   @ViewChild('textArea', { static: true }) textAreaElementRef!: ElementRef;
@@ -152,6 +153,7 @@ export class TextNoteComponent implements OnInit, OnDestroy, AfterViewInit {
           this.changeDetector.markForCheck();
         }
       })
+      .on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
       .on('SYNCHRONIZE_FILE_LIST', event => {
         this.changeDetector.markForCheck();
       })

@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, Input, OnDestroy, OnInit, ViewChild, ElementRef, ChangeDetectorRef } from '@angular/core';
+import { AfterViewInit, Component, Input, OnDestroy, OnInit, ViewChild, ElementRef, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
 import { Logger } from '../../class/core/system/util/logger';
 
 import { EventSystem, Network } from '@udonarium/core/system';
@@ -30,9 +30,11 @@ import { RangeArea } from '@udonarium/range';
 import { GameTableScratchMask } from '@udonarium/game-table-scratch-mask';
 
 @Component({
-  selector: 'game-character-sheet',
-  templateUrl: './game-character-sheet.component.html',
-  styleUrls: ['./game-character-sheet.component.css']
+    selector: 'game-character-sheet',
+    templateUrl: './game-character-sheet.component.html',
+    styleUrls: ['./game-character-sheet.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class GameCharacterSheetComponent implements OnInit, OnDestroy, AfterViewInit {
 

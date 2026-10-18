@@ -1,4 +1,6 @@
-import { Component, ElementRef, Input, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { PaletteBrowserComponent } from 'component/palette-browser/palette-browser.component';
+import { isPaletteCommand } from '@udonarium/palette-document';
+import { Component, ElementRef, Input, OnDestroy, OnInit, ViewChild, ChangeDetectionStrategy } from '@angular/core';
 import GameSystemClass from 'bcdice/lib/game_system';
 import { ChatPalette , PaletteIndex , PaletteMatch} from '@udonarium/chat-palette';
 import { ChatTab } from '@udonarium/chat-tab';
@@ -18,16 +20,19 @@ import { ContextMenuSeparator, ContextMenuService } from 'service/context-menu.s
 import { PointerDeviceService } from 'service/pointer-device.service';
 
 import { ChatMessage, ChatMessageContext, ChatMessageTargetContext } from '@udonarium/chat-message';
+import { PopupBridgeService } from 'service/popup-bridge.service';
 
 @Component({
-  selector: 'chat-palette',
-  templateUrl: './chat-palette.component.html',
-  styleUrls: ['./chat-palette.component.css']
+    selector: 'chat-palette',
+    templateUrl: './chat-palette.component.html',
+    styleUrls: ['./chat-palette.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class ChatPaletteComponent implements OnInit, OnDestroy {
   @ViewChild('root', { static: true }) rootElementRef!: ElementRef<HTMLElement>;
   @ViewChild('chatInput', { static: true }) chatInputComponent!: ChatInputComponent;
-  @ViewChild('chatPalette') chatPaletteElementRef!: ElementRef<HTMLSelectElement>;
+  @ViewChild('paletteBrowser') paletteBrowser: PaletteBrowserComponent;
   @Input() character: GameCharacter = null;
 
   get palette(): ChatPalette { return this.character.chatPalette; }
@@ -53,11 +58,8 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
   text: string = '';
   sendTo: string = '';
 
-  isEdit: boolean = false;
   isIndexOpen: boolean = false;
-  editPalette: string = '';
 
-  private doubleClickTimer: NodeJS.Timer = null;
 
   get diceBotInfos() { return DiceBot.diceBotInfos; }
 
@@ -70,7 +72,8 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
     private pointerDeviceService: PointerDeviceService,
     public chatMessageService: ChatMessageService,
     private panelService: PanelService,
-    private tabletopService: TabletopService
+    private tabletopService: TabletopService,
+    private popupBridge: PopupBridgeService
   ) { }
 
   ngOnInit() {
@@ -93,11 +96,112 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
         }
         this.japmIndex(event.data.lineNo);
       });
+    this.bridgeOff = this.popupBridge.channel(this.popupOwner).onMessage(message => this.handleBridgeMessage(message));
+    this.bridgeTimer = setInterval(() => {
+      if (this.isServing() && this.isSubLive()) this.pushBridgeState();
+    }, 2000);
   }
 
   ngOnDestroy() {
     EventSystem.unregister(this);
-    if (this.isEdit) this.toggleEditMode();
+    if (this.bridgeTimer) clearInterval(this.bridgeTimer);
+    if (this.bridgeOff) this.bridgeOff();
+    if (this.popupToken) {
+      this.popupBridge.channel(this.popupOwner).post({ type: 'owner-bye' });
+      this.popupBridge.releaseServe(this.popupOwner, this.popupToken);
+      this.popupToken = null;
+    }
+  }
+
+  /* ═══════════ 別ウィンドウ（チャパレポップアウト）ブリッジ ═══════════ */
+
+  /** このパネルが応答するポップアウトのオーナーID。キャラごとに独立なので複数同時ポップアウトできる。 */
+  private get popupOwner(): string {
+    const identifier = this.palette ? this.palette.identifier : (this.character ? this.character.identifier : 'panel');
+    return 'palette:panel:' + identifier;
+  }
+
+  private bridgeOff: () => void = null;
+  private bridgeTimer: any = null;
+  private popupToken: object = null;
+  private subLastSeen = 0;
+
+  private isSubLive(): boolean { return Date.now() - this.subLastSeen < 8000; }
+  private isServing(): boolean { return this.popupBridge.isServing(this.popupOwner, this.popupToken); }
+
+  openPaletteWindow() {
+    this.popupToken = this.popupBridge.claimServe(this.popupOwner);
+    this.popupBridge.openPopup('palette', this.popupOwner, { width: 540, height: 760 });
+    this.compactHostPanel();
+  }
+
+  /** ポップアウト中はメイン画面のこのパネルを最小化して左下へ畳んでおく。 */
+  private compactHostPanel() {
+    const ref = (this.panelService as any).panelComponentRef;
+    const panel: any = ref ? ref.instance : null;
+    if (!panel || typeof panel.toggleMinimize !== 'function') return;
+    try {
+      if (!panel.isMinimized) panel.toggleMinimize();
+      const element: HTMLElement = panel.draggablePanel ? panel.draggablePanel.nativeElement : null;
+      // 最小化直後はレイアウト反映前のためタイトルバーの高さで計算する
+      const titleBar: HTMLElement = panel.titleBar ? panel.titleBar.nativeElement : null;
+      const height = titleBar ? titleBar.offsetHeight : 48;
+      panel.left = 12;
+      panel.top = Math.max(12, window.innerHeight - height - 12);
+      if (element) {
+        element.style.left = panel.left + 'px';
+        element.style.top = panel.top + 'px';
+      }
+    } catch (_) { /* パネル操作に失敗してもポップアウト自体は継続 */ }
+  }
+
+  private applyReadOnly(value: boolean) {
+    if (this.paletteBrowser) this.paletteBrowser.readOnly = value;
+  }
+
+  private handleBridgeMessage(message: any) {
+    if (!this.isServing()) return;
+    switch (message.type) {
+      case 'ready':
+        this.subLastSeen = Date.now();
+        this.applyReadOnly(true);
+        this.pushBridgeState();
+        break;
+      case 'bye':
+        this.subLastSeen = 0;
+        this.applyReadOnly(false);
+        break;
+      case 'select-character':
+        if (typeof message.identifier === 'string') this.sendFrom = message.identifier;
+        break;
+      case 'edit-palette':
+        if (this.palette && typeof message.value === 'string' && String(this.palette.value ?? '') !== message.value) {
+          this.palette.setPalette(message.value);
+        }
+        break;
+      case 'choose-line':
+        this.selectPalette(message.line);
+        break;
+      case 'send-line':
+        this.sendPaletteCommand(message.line);
+        break;
+    }
+  }
+
+  private pushBridgeState() {
+    const characters = ObjectStore.instance.getObjects<GameCharacter>(GameCharacter)
+      .map(character => ({ identifier: character.identifier, name: character.name }));
+    this.popupBridge.channel(this.popupOwner).post({
+      type: 'state',
+      state: {
+        role: 'panel',
+        title: this.character ? this.character.name : '',
+        characters,
+        selected: this.character ? this.character.identifier : '',
+        paletteIdentifier: this.palette ? this.palette.identifier : '',
+        value: this.palette ? String(this.palette.value ?? '') : ''
+      }
+    });
   }
 
   updatePanelTitle() {
@@ -105,7 +209,6 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
   }
 
   onSelectedCharacter(identifier: string) {
-    if (this.isEdit) this.toggleEditMode();
     let object = ObjectStore.instance.get(identifier);
     if (object instanceof GameCharacter) {
       this.character = object;
@@ -113,6 +216,7 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
       if (0 < gameType.length) this.gameType = gameType;
     }
     this.updatePanelTitle();
+    if (this.isServing() && this.isSubLive()) this.pushBridgeState();
   }
 
   resizeChatInput() {
@@ -171,7 +275,7 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
 
   selectAutoComplete(text,selectText){
     const selectObj = <HTMLSelectElement>document.getElementById( this._timeId + '_complete');
-    let lineNo = this.palette.paletteMatchLine(text, selectObj.selectedIndex);
+    let lineNo = this.palette.getPalette().indexOf(selectText);
     Logger.debug(text + ' ' + selectText + ' index:' + selectObj.selectedIndex + ' lineNo' +lineNo);
     this.japmIndex(lineNo);
     this.selectPalette(selectText);
@@ -188,21 +292,9 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
   autoCompleteList(): string[]{
     let paletteMatch : string[] = new Array();
     if( this.text.length > 1){
-      paletteMatch = this.palette.paletteMatch(this.text);
+      paletteMatch = this.palette.paletteMatch(this.text).filter(isPaletteCommand);
     }
     return paletteMatch;
-  }
-
-  clickPalette(line: string) {
-    let multiLine = line.replace(/\\n/g, '\n');
-    if (this.doubleClickTimer && this.text === multiLine) {
-      clearTimeout(this.doubleClickTimer);
-      this.doubleClickTimer = null;
-      this.chatInputComponent.sendChat(null);
-    } else {
-      this.text = multiLine;
-      this.doubleClickTimer = setTimeout(() => { this.doubleClickTimer = null; }, 400);
-    }
   }
 
   private targeted(gameCharacter: GameCharacter): boolean {
@@ -233,7 +325,7 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
     return objects;
   }
 
-  sendChat(value: { text: string, gameSystem: GameSystemClass, sendFrom: string, sendTo: string , tachieNum: number, messColor: string}) {
+  sendChat(value: { text: string, gameSystem: GameSystemClass, sendFrom: string, sendTo: string , tachieNum: number, messColor: string, imageIdentifier?: string}) {
     if (this.chatTab) {
       let outtext = '';
       let objects: GameCharacter[] = [];
@@ -256,7 +348,8 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
             str2 = DiceBot.deleteMyselfResourceBuff(str);
           }
 
-          outtext += this.palette.evaluate(str2, this.character.rootDataElement, object, this.isExtendedDiceBotEnabled);
+          const evaluated = this.palette.evaluate(str2, this.character.rootDataElement, object, this.isExtendedDiceBotEnabled);
+          outtext += evaluated;
           outtext += ' ['+object.name + ']';
           first = false;
 
@@ -264,7 +357,7 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
             text: '',
             object: null
           };
-          targetContext.text = this.palette.evaluate(str2, this.character.rootDataElement, object, this.isExtendedDiceBotEnabled);
+          targetContext.text = evaluated;
           targetContext.object = object;
           messageTargetContext.push( targetContext);
         }
@@ -279,61 +372,23 @@ export class ChatPaletteComponent implements OnInit, OnDestroy {
         targetContext.object = null;
         messageTargetContext.push( targetContext);
       }
-      this.chatMessageService.sendMessage(this.chatTab, outtext, value.gameSystem, value.sendFrom, value.sendTo, value.tachieNum, value.messColor, messageTargetContext);
+      this.chatMessageService.sendMessage(this.chatTab, outtext, value.gameSystem, value.sendFrom, value.sendTo, value.tachieNum, value.messColor, messageTargetContext, false, value.imageIdentifier);
       // this.chatMessageService.sendMessage(this.chatTab, text, value.gameType, value.sendFrom, value.sendTo);
     }
   }
 
   resetPaletteSelect() {
-    if (!this.chatPaletteElementRef.nativeElement) return;
-    this.chatPaletteElementRef.nativeElement.selectedIndex = -1;
+    if (this.paletteBrowser) this.paletteBrowser.selected = -1;
   }
 
-  toggleEditMode() {
-    this.isEdit = this.isEdit ? false : true;
-    if (this.isEdit) {
-      const selectObj = document.getElementById(this._timeId + '_select');
-      const textObj = document.getElementById(this._timeId + '_text');
-      Logger.debug('selectObj.clientHeight:' + selectObj.clientHeight);
-      Logger.debug('selectObj.scrollHeight:' + selectObj.scrollHeight);
-      Logger.debug('selectObj.scrollTop:' + selectObj.scrollTop);
-/*
-      const lineNum = this.palette.getPalette().length;
-      Logger.debug('lineNum:' + lineNum);
-*/
-      this.editPalette = this.palette.value + '';
-      const selectTop = selectObj.scrollTop;
-      const selectHeight = selectObj.scrollHeight;
-/*
-      const centerLine = lineNum > 0 ? (selectObj.clientHeight/2 + selectObj.scrollHeight) / lineNum : lineNum;
-      Logger.debug('centerLine:' + centerLine);
-*/
-      setTimeout(() => { 
-        Logger.debug('textObj.clientHeight:' + textObj.clientHeight);
-        Logger.debug('textObj.scrollHeight:' + textObj.scrollHeight);
-        Logger.debug('textObj.scrollTop:' + textObj.scrollTop);
-        textObj.scrollTop = ( selectTop * textObj.scrollHeight ) / selectHeight;
-      }, 10);
-    } else {
-      this.palette.setPalette(this.editPalette);
-    }
-  }
-
-  moveTest(){
-    const textObj = <HTMLInputElement>document.getElementById(this._timeId + '_text');
-    textObj.focus();
-    setTimeout(() => {  
-                        textObj.setSelectionRange(600,600); }, 10);
+  sendPaletteCommand(line: string) {
+    if (!isPaletteCommand(line)) return;
+    this.selectPalette(line);
+    this.chatInputComponent.sendChat(null);
   }
 
   japmIndex(lineNo: number) {
-    Logger.debug('JUMP_INDEX:' + lineNo);
-    let select = <HTMLSelectElement> document.getElementById(this._timeId + '_select');
-    if (select){
-      select.scrollTop = select.scrollHeight;
-      select.options[lineNo].selected = false;
-      select.options[lineNo].selected = true;
-    }
+    this.paletteBrowser?.jumpToLine(lineNo);
   }
 
   indexBtn() {

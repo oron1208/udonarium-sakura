@@ -31,7 +31,7 @@ export class AudioLibraryService {
   }
 
   private detectBaseUrl(): string {
-    // SAKURA版: 常に同じオリジン（サーバー配信機能は使用しない）
+    // 常に同じオリジンを使用（ローカル・本番どちらでも動作）
     return '';
   }
 

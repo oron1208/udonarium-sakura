@@ -38,10 +38,11 @@ import { FilterType, GameTable, GridType } from '@udonarium/game-table';
 import { Config } from '@udonarium/config';
 
 @Component({
-  selector: 'terrain',
-  templateUrl: './terrain.component.html',
-  styleUrls: ['./terrain.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'terrain',
+    templateUrl: './terrain.component.html',
+    styleUrls: ['./terrain.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 
 export class TerrainComponent implements OnInit, OnDestroy, AfterViewInit{
@@ -183,6 +184,7 @@ export class TerrainComponent implements OnInit, OnDestroy, AfterViewInit{
         }
         this.gridCanvas.nativeElement.style.opacity = opacity + '';
       })
+      .on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
       .on('SYNCHRONIZE_FILE_LIST', event => {
         this.changeDetector.markForCheck();
       })

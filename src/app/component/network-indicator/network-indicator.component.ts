@@ -1,11 +1,13 @@
-import { AfterViewInit, Component, ElementRef, OnDestroy } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, OnDestroy, ChangeDetectionStrategy } from '@angular/core';
 
 import { EventSystem, Network } from '@udonarium/core/system';
 
 @Component({
-  selector: 'network-indicator',
-  templateUrl: './network-indicator.component.html',
-  styleUrls: ['./network-indicator.component.css']
+    selector: 'network-indicator',
+    templateUrl: './network-indicator.component.html',
+    styleUrls: ['./network-indicator.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class NetworkIndicatorComponent implements AfterViewInit, OnDestroy {
   private timer: NodeJS.Timer = null;

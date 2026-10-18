@@ -1,6 +1,5 @@
 import {
   AfterViewInit,
-  ComponentFactoryResolver,
   ComponentRef,
   Directive,
   Input,
@@ -16,7 +15,8 @@ import { ContextMenuService } from 'service/context-menu.service';
 import { PointerDeviceService } from 'service/pointer-device.service';
 
 @Directive({
-  selector: '[appTooltip]'
+    selector: '[appTooltip]',
+    standalone: false
 })
 export class TooltipDirective implements OnInit, AfterViewInit, OnDestroy {
   private static activeTooltips: ComponentRef<OverviewPanelComponent>[] = [];
@@ -35,7 +35,6 @@ export class TooltipDirective implements OnInit, AfterViewInit, OnDestroy {
   constructor(
     private ngZone: NgZone,
     private viewContainerRef: ViewContainerRef,
-    private componentFactoryResolver: ComponentFactoryResolver,
     private pointerDeviceService: PointerDeviceService
   ) { }
 
@@ -108,9 +107,8 @@ export class TooltipDirective implements OnInit, AfterViewInit, OnDestroy {
     let parentViewContainerRef = ContextMenuService.defaultParentViewContainerRef;
 
     const injector = parentViewContainerRef.injector;
-    const panelComponentFactory = this.componentFactoryResolver.resolveComponentFactory(OverviewPanelComponent);
 
-    this.tooltipComponentRef = parentViewContainerRef.createComponent(panelComponentFactory, parentViewContainerRef.length, injector);
+    this.tooltipComponentRef = parentViewContainerRef.createComponent(OverviewPanelComponent, { index: parentViewContainerRef.length, injector: injector });
 
     this.tooltipComponentRef.instance.tabletopObject = this.tabletopObject;
     this.tooltipComponentRef.instance.left = this.pointerDeviceService.pointerX;

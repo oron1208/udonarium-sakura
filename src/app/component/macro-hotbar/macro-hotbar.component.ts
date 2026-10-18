@@ -1,4 +1,4 @@
-import { Component, ElementRef, ViewChild } from '@angular/core';
+import { Component, ElementRef, ViewChild, ChangeDetectionStrategy } from '@angular/core';
 import { ChatMessageTargetContext } from '@udonarium/chat-message';
 import { ChatTab } from '@udonarium/chat-tab';
 import { ChatTabList } from '@udonarium/chat-tab-list';
@@ -37,9 +37,11 @@ const PAGE_COUNT = 5;
 const TOTAL_SLOT_COUNT = SLOT_COUNT * PAGE_COUNT;
 
 @Component({
-  selector: 'macro-hotbar',
-  templateUrl: './macro-hotbar.component.html',
-  styleUrls: ['./macro-hotbar.component.css']
+    selector: 'macro-hotbar',
+    templateUrl: './macro-hotbar.component.html',
+    styleUrls: ['./macro-hotbar.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class MacroHotbarComponent {
   @ViewChild('importFileInput') importFileInput!: ElementRef<HTMLInputElement>;
@@ -292,7 +294,7 @@ export class MacroHotbarComponent {
     this.sendMacro(slot);
   }
 
-  onSlotContextMenu(event: MouseEvent, visibleIndex: number) {
+  onSlotContextMenu(event: MouseEvent | KeyboardEvent, visibleIndex: number) {
     event.preventDefault();
     event.stopPropagation();
     const index = this.toSlotIndex(visibleIndex);

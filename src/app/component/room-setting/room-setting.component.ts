@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, ChangeDetectionStrategy } from '@angular/core';
 import { Logger } from '../../class/core/system/util/logger';
 
 import { PeerContext } from '@udonarium/core/system/network/peer-context';
@@ -11,9 +11,11 @@ import { ModalService } from 'service/modal.service';
 import { PanelService } from 'service/panel.service';
 
 @Component({
-  selector: 'room-setting',
-  templateUrl: './room-setting.component.html',
-  styleUrls: ['./room-setting.component.css']
+    selector: 'room-setting',
+    templateUrl: './room-setting.component.html',
+    styleUrls: ['./room-setting.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class RoomSettingComponent implements OnInit, OnDestroy {
   peers: PeerContext[] = [];
@@ -21,6 +23,7 @@ export class RoomSettingComponent implements OnInit, OnDestroy {
 
   roomName: string = 'ふつうの部屋';
   password: string = '';
+  isPasswordVisible = false;
   isPrivate: boolean = false;
   roomMode: RoomMode = 'standard';
 

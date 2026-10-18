@@ -1,4 +1,6 @@
-import { Component, ElementRef, HostBinding, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { PaletteBrowserComponent } from 'component/palette-browser/palette-browser.component';
+import { isPaletteCommand } from '@udonarium/palette-document';
+import { Component, ElementRef, HostBinding, NgZone, OnDestroy, OnInit, ViewChild, ChangeDetectionStrategy } from '@angular/core';
 import { Logger } from '../../class/core/system/util/logger';
 
 import { ChatMessage, ChatMessageTargetContext } from '@udonarium/chat-message';
@@ -9,12 +11,14 @@ import { ServerMediaStorage } from '@udonarium/core/file-storage/server-media-st
 import { ObjectStore } from '@udonarium/core/synchronize-object/object-store';
 import { EventSystem, Network } from '@udonarium/core/system';
 import { GameCharacter } from '@udonarium/game-character';
+import { PeerCursor } from '@udonarium/peer-cursor';
 import { DiceBot } from '@udonarium/dice-bot';
 import { Config } from '@udonarium/config';
 import { ChatMessageService } from 'service/chat-message.service';
 import { GmModeService } from 'service/gm-mode.service';
 import { PointerDeviceService } from 'service/pointer-device.service';
 import { TabletopService } from 'service/tabletop.service';
+import { PopupBridgeService } from 'service/popup-bridge.service';
 
 const BUBBLE_MS = 8000;
 const SPEAKING_MS = 2500;
@@ -55,14 +59,17 @@ interface VnActor {
 }
 
 @Component({
-  selector: 'vn-stage',
-  templateUrl: './vn-stage.component.html',
-  styleUrls: ['./vn-stage.component.css']
+    selector: 'vn-stage',
+    templateUrl: './vn-stage.component.html',
+    styleUrls: ['./vn-stage.component.css'],
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: false
 })
 export class VnStageComponent implements OnInit, OnDestroy {
   @HostBinding('class.vn-has-front-pinned') get hasFrontPinnedSubPanel(): boolean { return this.paletteFrontPinned || this.logFrontPinned; }
-  @ViewChild('logScroll', { static: false }) logScrollEl!: ElementRef;
+  @ViewChild('logScroll', { static: false }) logScrollEl!: ElementRef<HTMLDivElement>;
   @ViewChild('paletteScroll', { static: false }) paletteScrollEl!: ElementRef;
+  @ViewChild('vnPaletteBrowser') vnPaletteBrowser: PaletteBrowserComponent;
 
   actors: VnActor[] = [];
   selectedCharacterId: string = '';
@@ -172,7 +179,8 @@ export class VnStageComponent implements OnInit, OnDestroy {
     private ngZone: NgZone,
     private gmModeService: GmModeService,
     private pointerDeviceService: PointerDeviceService,
-    private tabletopService: TabletopService
+    private tabletopService: TabletopService,
+    private popupBridge: PopupBridgeService
   ) { }
 
   ngOnInit() {
@@ -184,6 +192,15 @@ export class VnStageComponent implements OnInit, OnDestroy {
       const children = initChar.imageDataElement.children || [];
       if (children.length > 0) this.selectedImageId = String((children[0] as any)?.value ?? '');
     }
+
+    this.paletteOff = this.popupBridge.channel(VnStageComponent.PALETTE_OWNER).onMessage(message => this.handlePalettePopup(message));
+    this.vnChatOff = this.popupBridge.channel(VnStageComponent.VN_CHAT_OWNER).onMessage(message => this.handleVnChatPopup(message));
+    this.paletteTimer = setInterval(() => {
+      if (this.isPaletteSubLive() && this.isPaletteServing()) this.pushPalettePopupState();
+    }, 2000);
+    this.vnChatTimer = setInterval(() => {
+      if (this.isVnChatSubLive() && this.isVnChatServing()) this.pushVnChatState();
+    }, 10000);
 
     try { this.isHotbarVisible = localStorage.getItem('udonarium.macroHotbar.visible.v1') !== '0'; } catch (_) { this.isHotbarVisible = true; }
     try { this.isAutoFit = localStorage.getItem('udonarium.vnStage.autoFit.v1') === '1'; } catch (_) { }
@@ -258,6 +275,7 @@ export class VnStageComponent implements OnInit, OnDestroy {
       .on('MESSAGE_ADDED', event => {
         const message = ObjectStore.instance.get<ChatMessage>(event.data.messageIdentifier);
         if (!message) return;
+        this.maybePushVnChatAppend(message);
         if (event.isSendFromSelf) {
           // 自分で送ったメッセージでも imageIdentifier が変わっていればアクター画像を更新
           if (message.imageIdentifier) {
@@ -404,6 +422,7 @@ export class VnStageComponent implements OnInit, OnDestroy {
     if (this.paletteFadeTimer) clearTimeout(this.paletteFadeTimer);
     if (this.indexFadeTimer) clearTimeout(this.indexFadeTimer);
     if (this._charactersCacheTimer) clearTimeout(this._charactersCacheTimer);
+    this.releasePopupServe();
     for (const a of this.actors) {
       if (a.typewriterTimer) { clearTimeout(a.typewriterTimer); clearInterval(a.typewriterTimer); }
     }
@@ -417,7 +436,7 @@ export class VnStageComponent implements OnInit, OnDestroy {
     if (this.panelX >= 0) { s['left'] = this.panelX + 'px'; s['right'] = 'auto'; s['bottom'] = 'auto'; }
     if (this.panelY >= 0) s['top'] = this.panelY + 'px';
     if (this.panelW > 0) s['width'] = this.panelW + 'px';
-    if (this.panelH > 0) { s['max-height'] = 'none'; s['height'] = this.panelH + 'px'; }
+    if (this.panelH > 0 && !this.panelMinimized) { s['max-height'] = 'none'; s['height'] = this.panelH + 'px'; }
     if (this.panelFrontPinned) s['z-index'] = '2000001';
     return s;
   }
@@ -570,7 +589,8 @@ export class VnStageComponent implements OnInit, OnDestroy {
     const y = this.paletteFloatY >= 0 ? this.paletteFloatY : 80;
     return {
       'left': x + 'px', 'top': y + 'px',
-      'width': this.paletteFloatW + 'px', 'height': this.paletteFloatH + 'px',
+      'width': this.paletteFloatW + 'px',
+      'height': this.paletteMinimized ? 'auto' : this.paletteFloatH + 'px',
       'z-index': String(this.paletteFrontPinned ? 9000 : this.paletteZIndex)
     };
   }
@@ -581,7 +601,8 @@ export class VnStageComponent implements OnInit, OnDestroy {
     const y = this.logFloatY >= 0 ? this.logFloatY : 80;
     return {
       'left': x + 'px', 'top': y + 'px',
-      'width': this.logFloatW + 'px', 'height': this.logFloatH + 'px',
+      'width': this.logFloatW + 'px',
+      'height': this.logMinimized ? 'auto' : this.logFloatH + 'px',
       'z-index': String(this.logFrontPinned ? 8999 : this.logZIndex)
     };
   }
@@ -839,10 +860,126 @@ export class VnStageComponent implements OnInit, OnDestroy {
     return this.chatTabs.find(t => t.identifier === this.selectedTabIdentifier) || this.chatTabs[0];
   }
 
+  private vnLogMessageLimit = 80;
+
   get chatLogMessages(): ChatMessage[] {
     const tab = this.selectedTab;
     if (!tab) return [];
-    return (tab.chatMessages || []).filter(m => this.canShowChatLogMessage(m)).slice(-80);
+    return (tab.chatMessages || []).filter(m => this.canShowChatLogMessage(m)).slice(-this.vnLogMessageLimit);
+  }
+
+  // ===== VNチャットログ検索 =====
+  vnSearchOpen = false;
+  vnSearchQuery = '';
+
+  get vnSearchResults(): { identifier: string, name: string, text: string, hasImage: boolean }[] {
+    const query = this.vnSearchQuery.trim().toLowerCase();
+    if (!query) return [];
+    const out: { identifier: string, name: string, text: string, hasImage: boolean }[] = [];
+    // 描画は直近80件でも、検索は選択中タブの表示可能な全履歴を対象にする。
+    for (const m of this.selectedTab?.chatMessages || []) {
+      if (!this.canShowChatLogMessage(m)) continue;
+      if (m.isSecret && !m.isSendFromSelf) continue;
+      const text = (m.text || '').toLowerCase();
+      const name = (m.name || '').toLowerCase();
+      if (text.includes(query) || name.includes(query)) {
+        out.push({ identifier: m.identifier, name: m.name, text: m.text, hasImage: !!(m.imageIdentifier && 0 < m.imageIdentifier.length) });
+      }
+    }
+    return out.slice(-50).reverse();
+  }
+
+  trackByVnSearchResult(_index: number, result: { identifier: string }): string {
+    return result.identifier;
+  }
+
+  vnJumpToMessage(identifier: string) {
+    const messages = (this.selectedTab?.chatMessages || []).filter(m => this.canShowChatLogMessage(m));
+    const index = messages.findIndex(m => m.identifier === identifier);
+    if (index < 0) return;
+    this.vnLogMessageLimit = Math.max(80, messages.length - index + 10);
+    this.vnSearchOpen = false;
+    setTimeout(() => {
+      const scroller = this.logScrollEl?.nativeElement;
+      const el = scroller?.querySelector<HTMLElement>(`.vn-log-msg[data-vn-msg-id="${identifier}"]`);
+      if (!el || !scroller) return;
+      const viewport = scroller.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
+      scroller.scrollTop += rect.top - viewport.top - Math.max(0, (scroller.clientHeight - rect.height) / 2);
+      el.style.transition = 'background-color 0.4s';
+      el.style.backgroundColor = 'rgba(255, 214, 79, 0.35)';
+      setTimeout(() => { el.style.backgroundColor = ''; }, 2400);
+    }, 150);
+  }
+
+  // ===== VNログ画像の拡大表示 =====
+  vnZoomIdentifier = '';
+
+  vnImageUrl(identifier: string): string {
+    const image = ImageStorage.instance.get(identifier);
+    return image ? image.url : '';
+  }
+
+  /** Imported/older logs can refer to a sender ID that no longer exists. */
+  private static chatSender(msg: ChatMessage): GameCharacter | PeerCursor {
+    const sender = ObjectStore.instance.get(msg.sendFrom);
+    if (sender instanceof GameCharacter || sender instanceof PeerCursor) return sender;
+    const name = String(msg.name || '').split(' > ')[0];
+    if (!name) return null;
+    const candidates: (GameCharacter | PeerCursor)[] = [
+      ...ObjectStore.instance.getObjects<GameCharacter>(GameCharacter),
+      ...ObjectStore.instance.getObjects<PeerCursor>(PeerCursor)
+    ].filter(candidate => candidate.name === name);
+    if (candidates.length === 1) return candidates[0];
+    const matching = candidates.filter(candidate => this.isSenderPortrait(candidate, msg.imageIdentifier));
+    return matching.length === 1 ? matching[0] : null;
+  }
+
+  private static isSenderPortrait(sender: GameCharacter | PeerCursor, identifier: string): boolean {
+    if (!identifier) return false;
+    if (sender instanceof PeerCursor) return sender.imageIdentifier === identifier;
+    return sender instanceof GameCharacter && !!sender.imageDataElement
+      && sender.imageDataElement.children.some(child => String(child.value || '') === identifier);
+  }
+
+  /** Avatar selection is independent of whether a message contains an attachment. */
+  static chatAvatarIdentifier(msg: ChatMessage): string {
+    if (msg.isSystem) return '';
+    const sender = this.chatSender(msg);
+    if (msg.imageKind !== 'attachment' && msg.imageIdentifier
+      && (msg.imageKind === 'portrait' || this.isSenderPortrait(sender, msg.imageIdentifier))) {
+      return msg.imageIdentifier;
+    }
+    if (sender instanceof GameCharacter && sender.imageDataElement) {
+      const selected = sender.imageDataElement.children[sender.selectedTachieNum];
+      return String(selected?.value || sender.imageFile.identifier || '');
+    }
+    return sender instanceof PeerCursor ? sender.imageIdentifier : '';
+  }
+
+  static chatAttachmentIdentifier(msg: ChatMessage): string {
+    if (!msg.imageIdentifier || msg.isSystem || msg.imageKind === 'portrait') return '';
+    if (msg.imageKind === 'attachment') return msg.imageIdentifier;
+    // Backwards-compatible inference for logs saved before imageKind existed.
+    return this.isSenderPortrait(this.chatSender(msg), msg.imageIdentifier) ? '' : msg.imageIdentifier;
+  }
+
+  vnAvatarId(msg: ChatMessage): string {
+    const id = VnStageComponent.chatAvatarIdentifier(msg);
+    if (id) this.ensureImageLoaded(id);
+    return id;
+  }
+
+  /** 本文には明示的に送った画像だけを表示する。 */
+  vnMessageImageId(msg: ChatMessage): string {
+    return VnStageComponent.chatAttachmentIdentifier(msg);
+  }
+
+  /** 自分の発言か（右側吹き出し）。プレイヤー発言のみtrue、キャラ発言はキャラ側（左）で表示 */
+  vnIsMine(msg: ChatMessage): boolean {
+    if (msg.isSystem || !msg.isSendFromSelf) return false;
+    const character = ObjectStore.instance.get<GameCharacter>(msg.sendFrom);
+    return !(character instanceof GameCharacter);
   }
 
   get diceBotInfos() { return DiceBot.diceBotInfos || []; }
@@ -853,6 +990,11 @@ export class VnStageComponent implements OnInit, OnDestroy {
 
   sectionTitle(line: string): string {
     return line.replace(/^\/\/---+/, '').replace(/-+$/, '').replace(/^◆/, '');
+  }
+
+  get selectedChatPalette() {
+    const character = ObjectStore.instance.get<GameCharacter>(this.selectedCharacterId);
+    return character instanceof GameCharacter ? character.chatPalette : null;
   }
 
   get selectedPaletteLines(): string[] {
@@ -1445,7 +1587,7 @@ export class VnStageComponent implements OnInit, OnDestroy {
     return { text: evaluated, messageTargetContext: [{ text: evaluated, object: null }] };
   }
 
-  sendVnChat() {
+  sendVnChat(imageIdentifier?: string) {
     let text = this.inputText.trim();
     if (!text) return;
     const secretText = this.applySecretMode(text);
@@ -1555,14 +1697,44 @@ export class VnStageComponent implements OnInit, OnDestroy {
 
     if (gameType && gameType !== 'DiceBot') {
       DiceBot.loadGameSystemAsync(gameType).then(gs => {
-        this.chatMessageService.sendMessage(chatTab, evaluatedText, gs, this.selectedCharacterId, null, tachieNum, messageColor, messageTargetContext, isSecret);
+        this.chatMessageService.sendMessage(chatTab, evaluatedText, gs, this.selectedCharacterId, null, tachieNum, messageColor, messageTargetContext, isSecret, imageIdentifier);
       });
     } else {
-      this.chatMessageService.sendMessage(chatTab, evaluatedText, null, this.selectedCharacterId, null, tachieNum, messageColor, messageTargetContext, isSecret);
+      this.chatMessageService.sendMessage(chatTab, evaluatedText, null, this.selectedCharacterId, null, tachieNum, messageColor, messageTargetContext, isSecret, imageIdentifier);
     }
     this.inputText = '';
     this.diceCounters.clear();
     this.diceBuffer = '';
+  }
+
+  /** VNチャット入力欄へも画像ドラッグ＆ドロップで貼れる */
+  vnImageDragOver = false;
+
+  onVnDragOver(event: DragEvent) {
+    if (!event.dataTransfer) return;
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+    event.preventDefault();
+    this.vnImageDragOver = true;
+  }
+
+  onVnDragLeave() { this.vnImageDragOver = false; }
+
+  onVnDrop(event: DragEvent) {
+    this.vnImageDragOver = false;
+    const files = event.dataTransfer ? event.dataTransfer.files : null;
+    if (!files || files.length < 1) return;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file.type.startsWith('image/')) continue;
+      event.preventDefault();
+      const title = window.prompt('画像のタイトル（検索でヒットします）', '');
+      if (title === null) return;
+      ImageStorage.instance.addAsync(file).then(imageFile => {
+        this.inputText = title.trim() || '画像';
+        this.sendVnChat(imageFile.identifier);
+      }).catch(e => Logger.warn('VN画像の貼り付けに失敗しました', e));
+      return;
+    }
   }
 
   toggleSecretMode() {
@@ -1706,6 +1878,7 @@ export class VnStageComponent implements OnInit, OnDestroy {
   }
 
   selectTab(tabId: string) {
+    this.vnLogMessageLimit = 80;
     this.selectedTabIdentifier = tabId;
   }
 
@@ -1747,28 +1920,186 @@ export class VnStageComponent implements OnInit, OnDestroy {
   }
 
   jumpToIndex(idx: { name: string; line: number }) {
-    this.paletteSearchText = '';
-    this.scrollToIndex = idx.line;
-    this.refreshPaletteFade();
-    this.refreshIndexFade();
-    setTimeout(() => {
-      try {
-        const el = document.querySelector('.vn-palette-scroll');
-        if (!el) return;
-        // DOM childrenは空行含む全行に対応する要素を持つ
-        // paletteIndex.line == visiblePaletteLinesのインデックス == DOM childrenのインデックス
-        const children = el.children;
-        if (children[idx.line]) {
-          (children[idx.line] as HTMLElement).scrollIntoView({ block: 'center' });
-        }
-      } catch (e) { Logger.warn('jumpToIndex error', e); }
-    }, 200);
+    this.vnPaletteBrowser?.jumpToLine(idx.line);
   }
 
   selectPaletteLine(line: string) {
     this.selectedPaletteLine = line;
     this.inputText = line;
     this.refreshPaletteFade();
+  }
+
+  /* ═══════════ 別ウィンドウ（ポップアウト）ブリッジ ═══════════ */
+
+  private static readonly PALETTE_OWNER = 'palette:vn';
+  private static readonly VN_CHAT_OWNER = 'chat:vn';
+
+  private paletteOff: () => void = null;
+  private paletteTimer: any = null;
+  private paletteToken: object = null;
+  private paletteSubLastSeen = 0;
+
+  private vnChatOff: () => void = null;
+  private vnChatTimer: any = null;
+  private vnChatToken: object = null;
+  private vnChatSubLastSeen = 0;
+
+  private isPaletteSubLive(): boolean { return Date.now() - this.paletteSubLastSeen < 8000; }
+  private isVnChatSubLive(): boolean { return Date.now() - this.vnChatSubLastSeen < 8000; }
+  private isPaletteServing(): boolean { return this.popupBridge.isServing(VnStageComponent.PALETTE_OWNER, this.paletteToken); }
+  private isVnChatServing(): boolean { return this.popupBridge.isServing(VnStageComponent.VN_CHAT_OWNER, this.vnChatToken); }
+
+  static serializeChatEntry(m: ChatMessage) {
+    const character = VnStageComponent.chatSender(m);
+    const isCharacterMessage = character instanceof GameCharacter;
+    const avatar = ImageStorage.instance.get(VnStageComponent.chatAvatarIdentifier(m));
+    const attachment = ImageStorage.instance.get(VnStageComponent.chatAttachmentIdentifier(m));
+    const avatarUrl = avatar?.url || '';
+    const imageUrl = attachment?.url || '';
+    return {
+      name: m.name || '',
+      text: String(m.text ?? ''),
+      timestamp: m.timestamp || 0,
+      messColor: m.messColor || '',
+      isSystem: !!m.isSystem,
+      isDicebot: !!m.isDicebot,
+      isSecret: !!m.isSecret,
+      secretVisible: !m.isDirect || m.isRelatedToMe,
+      isMine: !m.isSystem && !!m.isSendFromSelf && !isCharacterMessage, // キャラ発言は左側で表示
+      avatarUrl,
+      imageUrl
+    };
+  }
+
+  openPaletteWindow() {
+    this.paletteToken = this.popupBridge.claimServe(VnStageComponent.PALETTE_OWNER);
+    this.popupBridge.openPopup('palette', VnStageComponent.PALETTE_OWNER, { theme: 'vn', width: 540, height: 760 });
+  }
+
+  openVnChatWindow() {
+    this.vnChatToken = this.popupBridge.claimServe(VnStageComponent.VN_CHAT_OWNER);
+    this.popupBridge.openPopup('vnchat', VnStageComponent.VN_CHAT_OWNER, { theme: 'vn', width: 520, height: 780 });
+  }
+
+  private handlePalettePopup(message: any) {
+    if (!this.isPaletteServing()) return;
+    switch (message.type) {
+      case 'ready':
+        this.paletteSubLastSeen = Date.now();
+        if (this.vnPaletteBrowser) this.vnPaletteBrowser.readOnly = true;
+        if (this.paletteExpanded) this.paletteExpanded = false; // サブウィンドウに譲ってメイン画面を広く使う
+        this.pushPalettePopupState();
+        break;
+      case 'bye':
+        this.paletteSubLastSeen = 0;
+        if (this.vnPaletteBrowser) this.vnPaletteBrowser.readOnly = false;
+        break;
+      case 'select-character':
+        if (typeof message.identifier === 'string') this.selectCharacterFromBoard(message.identifier);
+        break;
+      case 'edit-palette': {
+        const palette = this.selectedChatPalette;
+        if (palette && typeof message.value === 'string' && String(palette.value ?? '') !== message.value) palette.setPalette(message.value);
+        break;
+      }
+      case 'choose-line':
+        this.selectPaletteLine(message.line);
+        break;
+      case 'send-line':
+        this.sendPaletteLine(message.line);
+        break;
+    }
+  }
+
+  private handleVnChatPopup(message: any) {
+    if (!this.isVnChatServing()) return;
+    switch (message.type) {
+      case 'ready':
+        this.vnChatSubLastSeen = Date.now();
+        this.pushVnChatState();
+        break;
+      case 'bye':
+        this.vnChatSubLastSeen = 0;
+        break;
+      case 'select-tab':
+        if (typeof message.identifier === 'string') this.selectedTabIdentifier = message.identifier;
+        this.pushVnChatState();
+        break;
+      case 'select-character':
+        if (typeof message.identifier === 'string') this.selectCharacterFromBoard(message.identifier);
+        this.pushVnChatState();
+        break;
+      case 'send-vn-chat':
+        if (typeof message.text === 'string' && message.text.trim()) {
+          this.inputText = message.text;
+          this.sendVnChat();
+        }
+        break;
+    }
+  }
+
+  private pushPalettePopupState() {
+    const characters = this.characters.map(character => ({ identifier: character.identifier, name: character.name }));
+    const palette = this.selectedChatPalette;
+    const character = ObjectStore.instance.get<GameCharacter>(this.selectedCharacterId);
+    this.popupBridge.channel(VnStageComponent.PALETTE_OWNER).post({
+      type: 'state',
+      state: {
+        role: 'vn',
+        title: character instanceof GameCharacter ? character.name : '',
+        characters,
+        selected: this.selectedCharacterId || '',
+        paletteIdentifier: palette ? palette.identifier : '',
+        value: palette ? String(palette.value ?? '') : ''
+      }
+    });
+  }
+
+  private pushVnChatState() {
+    this.popupBridge.channel(VnStageComponent.VN_CHAT_OWNER).post({
+      type: 'state',
+      state: {
+        mode: 'vnchat',
+        title: 'VNチャット',
+        tabs: this.chatTabs.map(tab => ({ id: tab.identifier, name: tab.name })),
+        currentTab: this.selectedTab ? this.selectedTab.identifier : '',
+        characters: this.characters.map(c => ({ identifier: c.identifier, name: c.name })),
+        selectedCharacter: this.selectedCharacterId || '',
+        sendFrom: this.selectedCharacterId || '',
+        sendFromName: '',
+        gameType: this.chatMessageService.gameType || 'DiceBot',
+        messages: this.chatLogMessages.map(m => VnStageComponent.serializeChatEntry(m))
+      }
+    });
+  }
+
+  private maybePushVnChatAppend(message: ChatMessage) {
+    if (!this.isVnChatSubLive() || !this.isVnChatServing()) return;
+    const tab = this.selectedTab;
+    if (!tab || message.tabIdentifier !== tab.identifier) return;
+    if (!this.canShowChatLogMessage(message)) return;
+    this.popupBridge.channel(VnStageComponent.VN_CHAT_OWNER).post({
+      type: 'chat-append',
+      tab: tab.identifier,
+      entries: [VnStageComponent.serializeChatEntry(message)]
+    });
+  }
+
+  private releasePopupServe() {
+    if (this.paletteTimer) { clearInterval(this.paletteTimer); this.paletteTimer = null; }
+    if (this.vnChatTimer) { clearInterval(this.vnChatTimer); this.vnChatTimer = null; }
+    if (this.paletteOff) { this.paletteOff(); this.paletteOff = null; }
+    if (this.vnChatOff) { this.vnChatOff(); this.vnChatOff = null; }
+    if (this.paletteToken) {
+      this.popupBridge.channel(VnStageComponent.PALETTE_OWNER).post({ type: 'owner-bye' });
+      this.popupBridge.releaseServe(VnStageComponent.PALETTE_OWNER, this.paletteToken);
+      this.paletteToken = null;
+    }
+    if (this.vnChatToken) {
+      this.popupBridge.channel(VnStageComponent.VN_CHAT_OWNER).post({ type: 'owner-bye' });
+      this.popupBridge.releaseServe(VnStageComponent.VN_CHAT_OWNER, this.vnChatToken);
+      this.vnChatToken = null;
+    }
   }
 
   isSecretRevealed(msg: any): boolean {
@@ -1787,6 +2118,7 @@ export class VnStageComponent implements OnInit, OnDestroy {
   }
 
   sendPaletteLine(line: string) {
+    if (!isPaletteCommand(line)) return;
     const character = ObjectStore.instance.get<GameCharacter>(this.selectedCharacterId);
     if (!(character instanceof GameCharacter)) return;
     const palette = character.chatPalette;
@@ -2160,7 +2492,7 @@ export class VnStageComponent implements OnInit, OnDestroy {
   }
 
   private loadNumber(key: string, fb: number): number {
-    try { const v = Number(localStorage.getItem(key)); return Number.isFinite(v) ? v : fb; } catch (_) { return fb; }
+    try { const raw = localStorage.getItem(key); if (raw === null) return fb; const v = Number(raw); return Number.isFinite(v) ? v : fb; } catch (_) { return fb; }
   }
 
   private loadSelectedCharacterId(): string {

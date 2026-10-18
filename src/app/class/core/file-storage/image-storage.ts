@@ -1,3 +1,4 @@
+import { MediaCache } from './media-cache';
 import { EventSystem } from '../system';
 import { ResettableTimeout } from '../system/util/resettable-timeout';
 import { ImageContext, ImageFile, ImageState } from './image-file';
@@ -14,6 +15,8 @@ export class ImageStorage {
   }
 
   private imageHash: { [identifier: string]: ImageFile } = {};
+  /** サーバーに存在しないことが確定した画像identifier */
+  readonly missingOnServer: Set<string> = new Set();
 
   get images(): ImageFile[] {
     let images: ImageFile[] = [];
@@ -27,9 +30,44 @@ export class ImageStorage {
 
   private constructor() {
     Logger.debug('ImageStorage ready...');
+    EventSystem.register(this)
+      .on('SERVER_MEDIA_MISSING', event => {
+        if (event.data?.kind === 'image' && event.data?.identifier) {
+          this.missingOnServer.add(event.data.identifier);
+          this.applyMissingFlag(event.data.identifier);
+          Logger.debug(`[ImageStorage] marked missing on server: ${event.data.identifier}`);
+        }
+      })
+      .on('MEDIA_REPLENISHED', event => {
+        if (event.data?.kind === 'audio') return;
+        if (event.data?.identifier) {
+          this.missingOnServer.delete(event.data.identifier);
+          this.applyMissingFlag(event.data.identifier);
+        }
+      });
+  }
+
+  /** missingOnServerの状態を該当ImageFileのmissingフラグへ反映（MISSINGプレースホルダー表示用） */
+  private applyMissingFlag(identifier: string) {
+    const image = this.imageHash[identifier];
+    if (!image) return;
+    const previous = image.missing;
+    // blob完全所持なら「?」表示にしない（missing表示はblob未所持のときだけ。所持データはLOCAL_ONLY＝再送候補）
+    if (image.blob && ImageState.COMPLETE <= image.state && image.state < ImageState.URL) {
+      image.missing = false;
+    } else {
+      image.missing = this.missingOnServer.has(identifier);
+    }
+    if (previous !== image.missing) this.notifyImageChanged(identifier);
+  }
+
+  /** Local mutation notification, after the stored ImageFile is ready to render. */
+  private notifyImageChanged(identifier: string) {
+    EventSystem.trigger('IMAGE_FILE_CHANGED', { identifier });
   }
 
   private destroy() {
+    EventSystem.unregister(this);
     for (let identifier in this.imageHash) {
       this.delete(identifier);
     }
@@ -59,17 +97,39 @@ export class ImageStorage {
     return this._add(image);
   }
 
+  /** Replace an existing identifier's bytes instead of merge-filling empty fields. */
+  replace(context: ImageContext): ImageFile {
+    const image = this.imageHash[context.identifier];
+    if (!image) return this.add(context);
+
+    image.replace(context);
+    this.applyMissingFlag(context.identifier);
+    this.notifyImageChanged(context.identifier);
+    if (ImageState.COMPLETE <= image.state) {
+      this.lazySynchronize(100);
+      ServerMediaStorage.uploadImage(image);
+      void MediaCache.cacheImage(image);
+    }
+    return image;
+  }
+
   private _add(image: ImageFile): ImageFile {
     if (ImageState.COMPLETE <= image.state) {
       this.lazySynchronize(100);
       ServerMediaStorage.uploadImage(image);
+      void MediaCache.cacheImage(image);
     }
     if (this.update(image)) {
       let stored = this.imageHash[image.identifier];
-      if (ImageState.COMPLETE <= stored.state) ServerMediaStorage.uploadImage(stored);
+      if (ImageState.COMPLETE <= stored.state) {
+        ServerMediaStorage.uploadImage(stored);
+        void MediaCache.cacheImage(stored);
+      }
       return stored;
     }
     this.imageHash[image.identifier] = image;
+    this.applyMissingFlag(image.identifier);
+    this.notifyImageChanged(image.identifier);
     Logger.debug('add Image: ' + image.identifier);
     return image;
   }
@@ -85,7 +145,10 @@ export class ImageStorage {
     }
     let updatingImage: ImageFile = this.imageHash[image.identifier];
     if (updatingImage) {
-      updatingImage.apply(image);
+      // Use raw context, not presentation getters (url may be the MISSING SVG).
+      updatingImage.apply(context);
+      this.applyMissingFlag(context.identifier);
+      this.notifyImageChanged(context.identifier);
       return true;
     }
     return false;
@@ -101,15 +164,17 @@ export class ImageStorage {
     return false;
   }
 
-  get(identifier: string): ImageFile {
+  get(identifier: string, autoFetch: boolean = true): ImageFile {
     let image: ImageFile = this.imageHash[identifier];
     if (image) return image;
     if (/^[a-f0-9]{64}$/i.test(identifier || '')) {
       image = ImageFile.createEmpty(identifier);
       this.imageHash[identifier] = image;
-      ServerMediaStorage.fetchImageOrNull(identifier).then(fetched => {
-        if (fetched) this.add(fetched);
-      });
+      if (autoFetch) {
+        MediaCache.fetchImageWithCache(identifier).then(fetched => {
+          if (fetched.status === 'ok') this.add(fetched.file);
+        }).catch(() => { });
+      }
       return image;
     }
     return null;

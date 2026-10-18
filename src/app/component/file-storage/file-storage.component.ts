@@ -11,10 +11,11 @@ import { PanelService } from 'service/panel.service';
 import { ImageTag } from '@udonarium/image-tag';//本家PR #92より
 
 @Component({
-  selector: 'file-storage',
-  templateUrl: './file-storage.component.html',
-  styleUrls: ['./file-storage.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'file-storage',
+    templateUrl: './file-storage.component.html',
+    styleUrls: ['./file-storage.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class FileStorageComponent implements OnInit, OnDestroy, AfterViewInit {
 
@@ -96,6 +97,12 @@ export class FileStorageComponent implements OnInit, OnDestroy, AfterViewInit {
   
   fileStorageService = ImageStorage.instance;
 
+  previewUrl(file: ImageFile): string {
+    // ファイル一覧は本体画像よりサムネイルを優先表示して、一覧表示の描画負荷を下げる。
+    // 本体しか無い画像・URL画像は従来通り file.url にフォールバックする。
+    return file?.thumbnail?.url || file?.url || '';
+  }
+
   inputNewTag(newTag: string) { 
     this.newTagName = newTag;
   }
@@ -146,7 +153,8 @@ export class FileStorageComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngAfterViewInit() {
-    EventSystem.register(this).on('SYNCHRONIZE_FILE_LIST', event => {
+    EventSystem.register(this).on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
+      .on('SYNCHRONIZE_FILE_LIST', event => {
       if (event.isSendFromSelf) {
         this.changeDetector.markForCheck();
       }
@@ -174,6 +182,7 @@ export class FileStorageComponent implements OnInit, OnDestroy, AfterViewInit {
   imgBlockClick(identifier){
     Logger.debug( "identifier:"+identifier);
     let box = <HTMLInputElement>document.getElementById(identifier+'_'+ this.initTimestamp);
+    if (!box) return;
     box.checked = !box.checked;
   }
   

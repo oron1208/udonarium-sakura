@@ -30,10 +30,11 @@ import { TabletopService } from 'service/tabletop.service';
 import { Logger } from '../../class/core/system/util/logger';
 
 @Component({
-  selector: 'card',
-  templateUrl: './card.component.html',
-  styleUrls: ['./card.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'card',
+    templateUrl: './card.component.html',
+    styleUrls: ['./card.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class CardComponent implements OnInit, OnDestroy, AfterViewInit {
   @Input() card: Card = null;
@@ -101,6 +102,7 @@ export class CardComponent implements OnInit, OnDestroy, AfterViewInit {
           this.changeDetector.markForCheck();
         }
       })
+      .on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
       .on('SYNCHRONIZE_FILE_LIST', event => {
         this.changeDetector.markForCheck();
       })

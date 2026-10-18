@@ -1,3 +1,4 @@
+import { PaletteBrowserComponent } from 'component/palette-browser/palette-browser.component';
 import { CommonModule } from '@angular/common';
 import { NgModule } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -39,12 +40,15 @@ import { GameDataElementBuffComponent } from 'component/game-data-element-buff/g
 import { GameObjectInventoryComponent } from 'component/game-object-inventory/game-object-inventory.component';
 import { GameTableMaskComponent } from 'component/game-table-mask/game-table-mask.component';
 import { GameTableSettingComponent } from 'component/game-table-setting/game-table-setting.component';
+import { DictionaryPanelComponent } from 'component/dictionary-panel/dictionary-panel.component';
 import { GameTableComponent } from 'component/game-table/game-table.component';
 import { JukeboxComponent } from 'component/jukebox/jukebox.component';
 import { LobbyComponent } from 'component/lobby/lobby.component';
 import { LinkyModule } from 'ngx-linky';
 import { ModalComponent } from 'component/modal/modal.component';
 import { NetworkIndicatorComponent } from 'component/network-indicator/network-indicator.component';
+import { ServerStatusComponent } from 'component/server-status/server-status.component';
+import { MediaIntegrityBadgeComponent } from 'component/media-integrity-badge/media-integrity-badge.component';
 import { NgSelectModule } from '@ng-select/ng-select';
 import { OverviewPanelComponent } from 'component/overview-panel/overview-panel.component';
 import { PasswordCheckComponent } from 'component/password-check/password-check.component';
@@ -98,6 +102,12 @@ import { BatchDamagePanelComponent } from 'component/batch-damage-panel/batch-da
 import { AlarmMenuComponent } from 'component/alarm-menu/alarm-menu.component';
 import { AlarmWindowComponent } from 'component/alarm-window/alarm-window.component';
 import { ChatMessageFixComponent } from 'component/chat-message-fix/chat-message-fix.component';
+import { PopupWindowComponent } from 'component/popup-window/popup-window.component';
+import { PopupChatComponent } from 'component/popup-chat/popup-chat.component';
+import { MiniPlayerComponent } from 'component/mini-player/mini-player.component';
+import { StickyNoteComponent } from 'component/sticky-note/sticky-note.component';
+import { MemoEditComponent } from 'component/memo-edit/memo-edit.component';
+import { DictPickerComponent } from 'component/dict-picker/dict-picker.component';
 import { MacroHotbarComponent } from 'component/macro-hotbar/macro-hotbar.component';
 import { DataImportMenuComponent } from 'component/data-import-menu/data-import-menu.component';
 import { EffectManagerComponent } from 'component/effect-manager/effect-manager.component';
@@ -126,6 +136,12 @@ import { AppComponent } from './app.component';
 //    CardStackListImageComponent,
     ChatMessageComponent,
     ChatPaletteComponent,
+    PopupWindowComponent,
+    PopupChatComponent,
+    MiniPlayerComponent,
+    StickyNoteComponent,
+    MemoEditComponent,
+    DictPickerComponent,
     ChatTabComponent,
     ChatTabSettingComponent,
     ChatWindowComponent,
@@ -155,6 +171,7 @@ import { AppComponent } from './app.component';
     GameObjectInventoryComponent,
     GameTableMaskComponent,
     GameTableSettingComponent,
+    DictionaryPanelComponent,
     GameTableComponent,
     JukeboxComponent,
 
@@ -168,6 +185,7 @@ import { AppComponent } from './app.component';
     VoteMenuComponent,
     VoteWindowComponent,
     VnStageComponent,
+    PaletteBrowserComponent,
     LightingLayerComponent,
     LightingPanelComponent,
     DiceCutinComponent,
@@ -208,6 +226,8 @@ import { AppComponent } from './app.component';
     MovableDirective,
     RotableDirective,
     NetworkIndicatorComponent,
+    ServerStatusComponent,
+    MediaIntegrityBadgeComponent,
     DiceSymbolComponent,
     TooltipDirective,
     DraggableDirective,

@@ -1,9 +1,9 @@
-import { ArrayUtil } from '../../util/array-util';
 import { compressAsync, decompressAsync } from '../../util/compress';
 import { MessagePack } from '../../util/message-pack';
 import { setZeroTimeout } from '../../util/zero-timeout';
 import { Connection, ConnectionCallback } from '../connection';
 import { IPeerContext, PeerContext } from '../peer-context';
+import { PeerSessionGrade } from '../peer-session-state';
 import { IRoomInfo, RoomInfo } from '../room-info';
 import { SkyWayDataStream } from './skyway-data-stream';
 import { SkyWayDataStreamList } from './skyway-data-stream-list';
@@ -15,6 +15,8 @@ type PeerId = string;
 interface DataContainer {
   data: Uint8Array;
   users?: string[];
+  peerIds?: string[];
+  senderUserId?: string;
   ttl: number;
   isCompressed?: boolean;
 }
@@ -46,6 +48,11 @@ export class SkyWayConnection implements Connection {
   private readonly relayingPeerIds: Map<string, string[]> = new Map();
   private readonly maybeUnavailablePeerIds: Set<string> = new Set();
 
+  private recoveryTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly connectingSince = new Map<string, number>();
+  /** reconcile連続自己不在カウンタ（4回=約20秒で接続破綻とみなす） */
+  private selfMissingCount = 0;
+
   configure(config: any) {
     this.skyWay.url = config?.backend?.url ?? '';
   }
@@ -53,7 +60,7 @@ export class SkyWayConnection implements Connection {
   setApiKey(key: string) { /* SkyWay 2023 uses backend-issued tokens, not client API keys. */ }
   setSignalingUrl(url: string) { if (url) this.skyWay.url = url; }
   setIceServers(iceServers: RTCIceServer[]) { /* SkyWay 2023 controls ICE via SkyWay platform/backend token. */ }
-  forceResync() { /* P2P mode has no central snapshot to force-resync. */ }
+  forceResync(): boolean { return false; /* InitialRoomSync handles P2P ZIP resync. */ }
 
   open(userId?: string)
   open(userId: string, roomId: string, roomName: string, password: string)
@@ -68,10 +75,13 @@ export class SkyWayConnection implements Connection {
       peer = PeerContext.create(args[0], args[1], args[2], args[3]);
     }
     this.trustedPeerIds.clear();
+    this.selfMissingCount = 0;
     this.openSkyWay(peer);
   }
 
   close() {
+    if (this.recoveryTimer != null) clearInterval(this.recoveryTimer);
+    this.recoveryTimer = null;
     this.disconnectAll();
     this.skyWay.close();
   }
@@ -104,7 +114,7 @@ export class SkyWayConnection implements Connection {
       return false;
     }
 
-    if (this.peerIds.includes(peerId)) {
+    if (this.streams.find(peerId)) {
       Logger.debug('connect() is Fail. <' + peerId + '> is already connecting.');
       return false;
     }
@@ -146,24 +156,22 @@ export class SkyWayConnection implements Connection {
 
     let byteLength = container.data.byteLength;
     this.bandwidthUsage += byteLength;
-    this.outboundQueue = this.outboundQueue.then(() => new Promise<void>((resolve, reject) => {
-      setZeroTimeout(async () => {
+    this.outboundQueue = this.outboundQueue.then(async () => {
+      await new Promise<void>(resolve => setZeroTimeout(resolve));
+      try {
         if (1 * 1024 < container.data.byteLength && Array.isArray(data) && 1 < data.length) {
           let compressed = await compressAsync(container.data);
-          if (compressed.byteLength < container.data.byteLength) {
+          if (compressed && compressed.byteLength < container.data.byteLength) {
             container.data = compressed;
             container.isCompressed = true;
           }
         }
-        if (sendTo) {
-          this.sendUnicast(container, sendTo);
-        } else {
-          this.sendBroadcast(container);
-        }
+        if (sendTo) this.sendUnicast(container, sendTo);
+        else this.sendBroadcast(container);
+      } finally {
         this.bandwidthUsage -= byteLength;
-        return resolve();
-      });
-    }));
+      }
+    }).catch(error => Logger.error('SkyWay send failed', error));
   }
 
   private sendUnicast(container: DataContainer, sendTo: string) {
@@ -205,6 +213,9 @@ export class SkyWayConnection implements Connection {
       Logger.debug('skyWay onOpen', peer);
       Logger.debug('My peer Context', this.peer);
       if (this.callback.onOpen) this.callback.onOpen(this.peer.peerId);
+      if (this.recoveryTimer != null) clearInterval(this.recoveryTimer);
+      this.recoveryTimer = setInterval(() => this.reconcileRoomMembers(), 5000);
+      this.reconcileRoomMembers();
     };
 
     this.skyWay.onClose = peer => {
@@ -253,11 +264,13 @@ export class SkyWayConnection implements Connection {
 
     this.trustedPeerIds.delete(stream.peer.peerId);
     this.maybeUnavailablePeerIds.add(stream.peer.peerId);
+    this.connectingSince.set(stream.peer.peerId, performance.now());
 
     stream.on('data', data => {
       this.onData(stream, data);
     });
     stream.on('open', () => {
+      this.connectingSince.delete(stream.peer.peerId);
       this.trustedPeerIds.add(stream.peer.peerId);
       this.maybeUnavailablePeerIds.delete(stream.peer.peerId);
       this.notifyUserList();
@@ -270,15 +283,33 @@ export class SkyWayConnection implements Connection {
       this.disconnectStream(stream);
     });
     stream.on('stats', async () => {
-      // not implemented
+      const health = stream.peer.session.health;
+      const grade = stream.peer.session.grade;
+      // health低下時に自動再接続（旧SkyWay版のロジックを復元）
+      if (health < 0.35 || (grade < PeerSessionGrade.MIDDLE && health < 0.7)) {
+        Logger.debug(`reconnecting... ${stream.peer.peerId} (health=${health.toFixed(2)}, grade=${grade})`);
+        // 不安定通知を送信（チャット用）
+        if (this.callback.onPeerUnstable) this.callback.onPeerUnstable(stream.peer.peerId, health);
+        const peer = PeerContext.parse(stream.peer.peerId);
+        peer.userId = stream.peer.userId;
+        this.disconnectStream(stream);
+        this.connect(peer);
+      }
     });
 
-    stream.connect();
+    Promise.resolve().then(() => stream.connect()).catch(error => {
+      Logger.error("SkyWay connect failed", error);
+      this.disconnectStream(stream);
+    });
   }
 
   private disconnectStream(stream: SkyWayDataStream) {
-    stream.disconnect();
+    // A late close from a replaced stream must not remove its replacement.
     let closed = this.streams.remove(stream);
+    stream.disconnect();
+    if (!closed) return;
+    this.connectingSince.delete(stream.peer.peerId);
+    this.maybeUnavailablePeerIds.delete(stream.peer.peerId);
 
     this.relayingPeerIds.delete(stream.peer.peerId);
     this.relayingPeerIds.forEach(peerIds => {
@@ -290,20 +321,52 @@ export class SkyWayConnection implements Connection {
   }
 
   private onData(stream: SkyWayDataStream, container: DataContainer) {
-    if (container.users && 0 < container.users.length) this.onUpdateUserIds(stream, container.users);
+    if (container.peerIds) this.onUpdatePeerIds(stream, container.peerIds, container.senderUserId);
     if (0 < container.ttl) this.onRelay(stream, container);
     if (!this.callback.onData) return;
     let byteLength = container.data.byteLength;
     this.bandwidthUsage += byteLength;
-    this.inboundQueue = this.inboundQueue.then(() => new Promise<void>((resolve, reject) => {
-      setZeroTimeout(async () => {
+    this.inboundQueue = this.inboundQueue.then(async () => {
+      await new Promise<void>(resolve => setZeroTimeout(resolve));
+      try {
         if (!this.callback.onData) return;
         let data = container.isCompressed ? await decompressAsync(container.data) : container.data;
-        this.callback.onData(stream.peer.peerId, MessagePack.decode(data));
+        const decoded = data ? MessagePack.decode(data) : null;
+        if (!Array.isArray(decoded)) throw new Error('Invalid SkyWay event batch');
+        this.callback.onData(stream.peer.peerId, decoded);
+      } finally {
         this.bandwidthUsage -= byteLength;
-        return resolve();
-      });
-    }));
+      }
+    }).catch(error => Logger.error('SkyWay receive failed', error));
+  }
+
+  /** Recover missing room links without relying on gossip from an existing link. */
+  private reconcileRoomMembers() {
+    if (!this.skyWay.isOpen || !this.skyWay.room) return;
+    const members = new Set(this.skyWay.room.members.map(member => member.name));
+    // 自分自身が部屋メンバーから消えている＝SDKがkeepalive失敗等でローカル退室扱いした状態。
+    // isOpenはtrueのまま固まり既存検知（isOpen=false 8秒）が発火しないため、ここで接続を明示的に壊す。
+    if (!members.has(this.peerId)) {
+      this.selfMissingCount++;
+      Logger.warn(`[SkyWay] self missing from room members (${this.selfMissingCount}/4)`);
+      if (this.selfMissingCount >= 4) {
+        this.selfMissingCount = 0;
+        this.skyWay.markBroken('self dropped from room members');
+        return;
+      }
+    } else {
+      this.selfMissingCount = 0;
+    }
+    for (const stream of this.streams) {
+      const started = this.connectingSince.get(stream.peer.peerId);
+      if (!members.has(stream.peer.peerId) ||
+          (!stream.open && started != null && performance.now() - started >= 30000)) {
+        this.disconnectStream(stream);
+      }
+    }
+    for (const peerId of members) {
+      if (peerId && peerId !== this.peerId && !this.streams.find(peerId)) this.connect(peerId);
+    }
   }
 
   private onRelay(stream: SkyWayDataStream, container: DataContainer) {
@@ -314,6 +377,8 @@ export class SkyWayConnection implements Connection {
 
     if (container.users && 0 < container.users.length) {
       container.users = this.userIds;
+      container.peerIds = this.peerIds.concat(this.peerId);
+      container.senderUserId = this.peer.userId;
     }
 
     for (let peerId of relayingPeerIds) {
@@ -325,31 +390,13 @@ export class SkyWayConnection implements Connection {
     }
   }
 
-  private onUpdateUserIds(stream: SkyWayDataStream, userIds: string[]) {
-    let needsNotifyUserList = false;
-    userIds.forEach(userId => {
-      let peer = this.makeFriendPeer(userId);
-      let stream = this.streams.find(peer.peerId);
-      if (stream && stream.peer.userId !== userId) {
-        stream.peer.userId = userId;
-        needsNotifyUserList = true;
-      }
-    });
-
-    let diff = ArrayUtil.diff(this.userIds, userIds);
-    let relayingUserIds = diff.diff1;
-    let unknownUserIds = diff.diff2;
-    this.relayingPeerIds.set(stream.peer.peerId, relayingUserIds.map(userId => this.makeFriendPeer(userId).peerId));
-
-    if (unknownUserIds.length) {
-      for (let userId of unknownUserIds) {
-        let peer = this.makeFriendPeer(userId);
-        if (!this.maybeUnavailablePeerIds.has(peer.peerId) && this.connect(peer)) {
-          Logger.debug('auto connect to unknown Peer <' + peer.peerId + '>');
-        }
-      }
-    }
-    if (needsNotifyUserList) this.notifyUserList();
+  private onUpdatePeerIds(stream: SkyWayDataStream, peerIds: string[], userId?: string) {
+    // Room peer IDs are random per session: never regenerate them from names.
+    const changed = typeof userId === 'string' && stream.peer.userId !== userId;
+    if (changed) stream.peer.userId = userId;
+    this.relayingPeerIds.set(stream.peer.peerId,
+      this.peerIds.filter(peerId => peerId !== stream.peer.peerId && !peerIds.includes(peerId)));
+    if (changed) this.notifyUserList();
   }
 
   private notifyUserList() {
@@ -358,16 +405,11 @@ export class SkyWayConnection implements Connection {
     let container: DataContainer = {
       data: MessagePack.encode([]),
       users: this.userIds,
+      peerIds: this.peerIds.concat(this.peerId),
+      senderUserId: this.peer.userId,
       ttl: 1
     }
     this.sendBroadcast(container);
   }
 
-  private makeFriendPeer(userId: string): PeerContext {
-    if (!this.peer.isRoom) return PeerContext.create(userId);
-    const password = this.peer.isDeveloperJoin
-      ? PeerContext.createDeveloperJoinPassword(this.peer.digestPassword, this.peer.roomChannelName)
-      : this.peer.password;
-    return PeerContext.create(userId, this.peer.roomId, this.peer.roomName, password);
-  }
 }

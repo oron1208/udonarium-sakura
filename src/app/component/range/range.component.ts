@@ -36,10 +36,11 @@ import { TableSelecter } from '@udonarium/table-selecter';
 import { FilterType, GameTable, GridType } from '@udonarium/game-table';
 
 @Component({
-  selector: 'range',
-  templateUrl: './range.component.html',
-  styleUrls: ['./range.component.css'],
-  changeDetection: ChangeDetectionStrategy.OnPush
+    selector: 'range',
+    templateUrl: './range.component.html',
+    styleUrls: ['./range.component.css'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class RangeComponent implements OnInit, OnDestroy, AfterViewInit {
   @Input() range: RangeArea = null;
@@ -250,6 +251,7 @@ export class RangeComponent implements OnInit, OnDestroy, AfterViewInit {
           this.setRange();
         }
       })
+      .on('IMAGE_FILE_CHANGED', () => this.changeDetector.markForCheck())
       .on('SYNCHRONIZE_FILE_LIST', event => {
         this.changeDetector.markForCheck();
       })
