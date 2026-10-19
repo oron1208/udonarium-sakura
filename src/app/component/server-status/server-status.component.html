@@ -53,7 +53,7 @@
     }
   </div>
 } @else {
-  @if (error) {
+  @if (error && !serverless) {
     <div class="server-status-inline server-status-error">
       サーバー状態取得失敗：{{ error }}
     </div>

@@ -101,7 +101,10 @@ export class AudioSharingSystem {
               // サーバーに存在しない音声はplaceholderを削除し、所持者が再アップロードして自己修復する
               AudioStorage.instance.delete(item.identifier);
               this.requestReplenish(item.identifier);
-              Logger.debug(`[AudioSharingSystem] removed missing placeholder: ${item.identifier}`);
+              // サーバーAPIが無い環境（さくら等の静的ホスティング）では
+              // サーバー補充は永久に成功しないため、P2Pで所持ピアから直接取得する
+              request.push(item);
+              Logger.debug(`[AudioSharingSystem] missing audio, falling back to P2P: ${item.identifier}`);
             } else {
               request.push(item);
             }

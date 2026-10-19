@@ -47,6 +47,8 @@ export class ServerStatusComponent implements OnInit, OnDestroy {
   expanded = false;
   loading = false;
   error: string | null = null;
+  /** サーバーAPIが存在しない環境（さくら等の静的ホスティング）での非表示フラグ */
+  serverless = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private static readonly POLL_MS = 30000;
 
@@ -109,10 +111,17 @@ export class ServerStatusComponent implements OnInit, OnDestroy {
   }
 
   private async refresh() {
-    if (this.loading) return;
+    if (this.loading || this.serverless) return;
     this.loading = true;
     try {
       const res = await fetch('/api/status', { cache: 'no-cache' });
+      if (res.status === 404) {
+        // 静的ホスティング（さくら等）: サーバーAPIが存在しない → 表示とポーリングを停止
+        this.serverless = true;
+        this.error = null;
+        if (this.timer) { clearInterval(this.timer); this.timer = null; }
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       this.status = await res.json();
       this.error = null;

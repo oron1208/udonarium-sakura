@@ -109,7 +109,10 @@ export class ImageSharingSystem {
               // instance, and a ZIP import may have filled it during the fetch.
               // 所持者がいればサーバーへ再アップロードしてもらい自己修復する
               this.requestReplenish(item.identifier);
-              Logger.debug(`[ImageSharingSystem] awaiting missing image recovery: ${item.identifier}`);
+              // サーバーAPIが無い環境（さくら等の静的ホスティング）では
+              // サーバー補充は永久に成功しないため、P2Pで所持ピアから直接取得する
+              request.push(item);
+              Logger.debug(`[ImageSharingSystem] missing image, falling back to P2P: ${item.identifier}`);
             } else {
               request.push(item);
             }
